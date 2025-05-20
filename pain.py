@@ -80,6 +80,8 @@ track_ids = data['track_id'].astype(str)
 base_dir = 'data/fma_small'
 # song_id_to_path to dictionary twn path pou exoun ola ta track paths pou thelw na epeksergastw
 track_id_to_path = {}
+count = 0
+track_limit = 100
 
 # Walk through all subfolders and collect matching file paths
 for root, dirs, files in os.walk(base_dir):
@@ -89,8 +91,14 @@ for root, dirs, files in os.walk(base_dir):
             if track_id in track_ids:
                 full_path = os.path.join(root, file)
                 track_id_to_path[track_id] = full_path
-
-#print(song_id_to_path)
+                count += 1
+                if count >= track_limit:
+                    break
+    if count >= track_limit:
+        break
+#test print
+print(len(track_id_to_path))
+#print(track_id_to_path)
 
 #endregion
 
@@ -99,13 +107,17 @@ loaded_audio = {}
 #TODO : check if the audio files are loaded correctly
 
 for track_id, filepath in track_id_to_path.items():
+    if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
+        print(f"⚠️ Skipping invalid or empty file: {filepath}")
+        continue
     try:
-        # Load the audio file using Essentia
         audio = es.MonoLoader(filename=filepath)()
         loaded_audio[track_id] = audio
     except Exception as e:
-        print(f"Error loading {filepath} (track_id {track_id}): {e}")
+        print(f"❌ Error loading {filepath} (track_id {track_id}): {e}")
+        continue
 #test print
+print(len(loaded_audio))
 print(loaded_audio)
 #endregion
 
@@ -114,7 +126,7 @@ processed_data_pitch = []
 
 for track_id, filepath in track_id_to_path.items():
 
-    audio = es.MonoLoaader(filename=filepath)()
+    audio = es.MonoLoader(filename=filepath)()
     
     #features = extract_features(filepath)  # Your feature extractor
     #features['song_id'] = int(track_id)

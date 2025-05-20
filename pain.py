@@ -103,8 +103,9 @@ print(len(track_id_to_path))
 #endregion
 
 #region load audio files
-loaded_audio = {}
-#TODO : check if the audio files are loaded correctly
+
+#load mono audio files -> beat tracking, tempo estimation, onset detection, rhythmic analysis, uniform preprocessing
+mono_loaded_audio = {}
 
 for track_id, filepath in track_id_to_path.items():
     if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
@@ -112,16 +113,35 @@ for track_id, filepath in track_id_to_path.items():
         continue
     try:
         audio = es.MonoLoader(filename=filepath)()
-        loaded_audio[track_id] = audio
+        mono_loaded_audio[track_id] = audio
     except Exception as e:
         print(f"❌ Error loading {filepath} (track_id {track_id}): {e}")
         continue
 #test print
-print(len(loaded_audio))
-print(loaded_audio)
+print(len(mono_loaded_audio))
+print(mono_loaded_audio)
+
+#load eqloud audio files -> pitch estimation, music transcription, chord detection, melodic analysis
+eqloud_loaded_audio = {}
+
+for track_id, filepath in track_id_to_path.items():
+    if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
+        print(f"⚠️ Skipping invalid or empty file: {filepath}")
+        continue
+    try:
+        audio = es.EqloudLoader(filename=filepath, sampleRate=44100)()
+        eqloud_loaded_audio[track_id] = audio
+    except Exception as e:
+        print(f"❌ Error loading {filepath} (track_id {track_id}): {e}")
+        continue
+#test print
+print(len(eqloud_loaded_audio))
+print(eqloud_loaded_audio)
 #endregion
 
 #region track feature extracting / processing 
+
+#pitch extraction
 processed_data_pitch = []
 
 for track_id, filepath in track_id_to_path.items():

@@ -1,6 +1,7 @@
 # https://www.youtube.com/watch?v=SW0YGA9d8y8
 # https://github.com/microsoft/pylance-release/blob/main/TROUBLESHOOTING.md#unresolved-import-warnings
 # source ./soundvenv/bin/activate
+# to commit -> move pain.py to rep folder
 
 # Imports
 import os
@@ -8,9 +9,11 @@ import os
 import IPython.display as ipd
 import pandas as pd
 import numpy as np
+
 import librosa
 import librosa.display
 import essentia 
+import essentia.standard as es
 
 
 from sklearn.neighbors import KNeighborsClassifier
@@ -69,10 +72,54 @@ preprocess_data(data)
 
 # Feature Engineering (add essentia stuff)
 
+#region edw epilegw poia tragoudia epeksergazomai
 # first, check which song ids we process
 track_ids = data['track_id'].astype(str)
-print(track_ids)
 
+# build a map of song_id -> filepath by walking fma_small
+base_dir = 'data/fma_small'
+# song_id_to_path to dictionary twn path pou exoun ola ta track paths pou thelw na epeksergastw
+track_id_to_path = {}
+
+# Walk through all subfolders and collect matching file paths
+for root, dirs, files in os.walk(base_dir):
+    for file in files:
+        if file.endswith('.mp3'):
+            track_id = int(file.replace('.mp3', ''))
+            if track_id in track_ids:
+                full_path = os.path.join(root, file)
+                track_id_to_path[track_id] = full_path
+
+#print(song_id_to_path)
+
+#endregion
+
+#region load audio files
+loaded_audio = {}
+#TODO : check if the audio files are loaded correctly
+
+for track_id, filepath in track_id_to_path.items():
+    try:
+        # Load the audio file using Essentia
+        audio = es.MonoLoader(filename=filepath)()
+        loaded_audio[track_id] = audio
+    except Exception as e:
+        print(f"Error loading {filepath} (track_id {track_id}): {e}")
+#test print
+print(loaded_audio)
+#endregion
+
+#region track feature extracting / processing 
+processed_data_pitch = []
+
+for track_id, filepath in track_id_to_path.items():
+
+    audio = es.MonoLoaader(filename=filepath)()
+    
+    #features = extract_features(filepath)  # Your feature extractor
+    #features['song_id'] = int(track_id)
+    #processed_data_pitch.append(features)
+#endregion
 
 
 # Create Features / Target Variables (Make flashcards)

@@ -54,14 +54,14 @@ preprocess_data(data)
 
 #region edw epilegw poia tragoudia epeksergazomai
 # first, check which song ids we process
-track_ids = data['track_id'].astype(str)
+track_ids = data['track_id'].astype(int)
 
 # build a map of song_id -> filepath by walking fma_small
 base_dir = 'data/fma_small'
 # song_id_to_path to dictionary twn path pou exoun ola ta track paths pou thelw na epeksergastw
 track_id_to_path = {}
 count = 0
-track_limit = 100
+track_limit = 10 #TODO: Limit to 10 tracks for testing; change to 100 for full processing
 
 # Walk through all subfolders and collect matching file paths
 for root, dirs, files in os.walk(base_dir):
@@ -166,6 +166,49 @@ processed_data_pitch = extract_pitch(eqloud_loaded_audio)
 #pitch test print
 #print(processed_data_pitch)
 
+# Add pitch mean as a new feature to the original data DataFrame
+# First, ensure track_id is int for safe merging
+data['track_id'] = data['track_id'].astype(int)
+
+# Prepare pitch feature dataframe
+pitch_features = []
+
+for track_id, pitch_data in processed_data_pitch.items():
+    pitch_values = np.array(pitch_data['pitch_values'])
+    
+    # Filter out 0 Hz pitches (no pitch detected)
+    valid_pitches = pitch_values[pitch_values > 0]
+
+    if len(valid_pitches) > 0:
+        mean_pitch = np.mean(valid_pitches)
+        median_pitch = np.median(valid_pitches)
+        std_pitch = np.std(valid_pitches)
+    else:
+        mean_pitch = np.nan
+        median_pitch = np.nan
+        std_pitch = np.nan
+
+    pitch_features.append({
+        'track_id': track_id,
+        'pitch_mean': mean_pitch,
+        'pitch_median': median_pitch,
+        'pitch_std': std_pitch
+    })
+
+# Create DataFrame and merge with original data
+pitch_df = pd.DataFrame(pitch_features)
+# Keep only the rows with track_ids in processed_data_pitch
+data = data[data['track_id'].isin(processed_data_pitch.keys())]
+data = pd.merge(data, pitch_df, on='track_id', how='left')
+
+
+# Test print
+print(data)
+#print(len(data))
+#print(data[['track_id', 'pitch_mean', 'pitch_median', 'pitch_std']].head())
+#print("Pitch entries:", list(processed_data_pitch.keys())[:10])
+#print("DataFrame track_ids:", data['track_id'].head(10).tolist())
+#print(data.info())
 #endregion
 
 

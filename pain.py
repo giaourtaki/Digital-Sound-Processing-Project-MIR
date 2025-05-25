@@ -26,26 +26,6 @@ import seaborn as sns
 import utils
 
 
-
-#region trial
-
-# plt.rcParams['figure.figsize'] = (17, 5)
-
-# # Directory where mp3 are stored.
-# AUDIO_DIR = os.environ.get(r"C:\Users\marin\Desktop\Pshfiakh_Texnologia_Hxou\Apallaktikh\Database")
-
-# # Load metadata and features.
-# tracks = utils.load('data/fma_metadata/tracks.csv')
-# genres = utils.load('data/fma_metadata/genres.csv')
-# features = utils.load('data/fma_metadata/features.csv')
-# echonest = utils.load('data/fma_metadata/echonest.csv')
-
-# np.testing.assert_array_equal(features.index, tracks.index)
-# assert echonest.index.isin(tracks.index).all()
-
-# tracks.shape, genres.shape, features.shape, echonest.shape
-#endregion
-
 # Data Frame Creation
 data = pd.read_csv('data/fma_metadata/raw_tracks.csv')
 # data.info()
@@ -97,7 +77,7 @@ for root, dirs, files in os.walk(base_dir):
     if count >= track_limit:
         break
 #test print
-print(len(track_id_to_path))
+#print(len(track_id_to_path))
 #print(track_id_to_path)
 
 #endregion
@@ -109,48 +89,83 @@ mono_loaded_audio = {}
 
 for track_id, filepath in track_id_to_path.items():
     if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
-        print(f"⚠️ Skipping invalid or empty file: {filepath}")
+        print(f"Skipping invalid or empty file: {filepath}")
         continue
     try:
         audio = es.MonoLoader(filename=filepath)()
         mono_loaded_audio[track_id] = audio
     except Exception as e:
-        print(f"❌ Error loading {filepath} (track_id {track_id}): {e}")
+        print(f"Error loading {filepath} (track_id {track_id}): {e}")
         continue
 #test print
-print(len(mono_loaded_audio))
-print(mono_loaded_audio)
+#print(len(mono_loaded_audio))
+#print(mono_loaded_audio)
 
 #load eqloud audio files -> pitch estimation, music transcription, chord detection, melodic analysis
 eqloud_loaded_audio = {}
 
 for track_id, filepath in track_id_to_path.items():
     if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
-        print(f"⚠️ Skipping invalid or empty file: {filepath}")
+        print(f"Skipping invalid or empty file: {filepath}")
         continue
     try:
         audio = es.EqloudLoader(filename=filepath, sampleRate=44100)()
         eqloud_loaded_audio[track_id] = audio
     except Exception as e:
-        print(f"❌ Error loading {filepath} (track_id {track_id}): {e}")
+        print(f"Error loading {filepath} (track_id {track_id}): {e}")
         continue
 #test print
-print(len(eqloud_loaded_audio))
-print(eqloud_loaded_audio)
+#print(len(eqloud_loaded_audio))
+#print(eqloud_loaded_audio)
 #endregion
 
 #region track feature extracting / processing 
 
 #pitch extraction
-processed_data_pitch = []
+def extract_pitch(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
 
-for track_id, filepath in track_id_to_path.items():
+    processed_data_pitch = {}
 
-    audio = es.MonoLoader(filename=filepath)()
-    
-    #features = extract_features(filepath)  # Your feature extractor
-    #features['song_id'] = int(track_id)
-    #processed_data_pitch.append(features)
+    window = es.Windowing(type='hann') #Using Hann window 
+    yin = es.PitchYin(frameSize=frame_size)
+
+    total_tracks = len(eqloud_loaded_audio)
+    for idx, (track_id, audio) in enumerate(eqloud_loaded_audio.items(), start=1):
+        pitches = []
+        confidences = []
+        times = []
+
+        # Process audio in frames with feedback
+        duration_sec = len(audio) / sample_rate
+        num_frames = (len(audio) - frame_size) // hop_size
+        print(f"[{idx}/{total_tracks}] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
+
+        for i in range(0, len(audio) - frame_size, hop_size):
+            frame = audio[i:i + frame_size]
+            if len(frame) < frame_size:
+                break
+
+            pitch, confidence = yin(window(frame))
+            pitches.append(pitch)
+            confidences.append(confidence)
+            times.append(i / sample_rate)
+
+            # Log progress every 10 seconds of audio
+            if i % (sample_rate * 10) == 0 and i != 0:
+                print(f"    ↳ Processed {i / sample_rate:.1f}s")
+
+        processed_data_pitch[track_id] = {
+            'pitch_values': pitches,
+            'pitch_confidence': confidences,
+            'pitch_times': times
+        }
+
+    return processed_data_pitch
+
+processed_data_pitch = extract_pitch(eqloud_loaded_audio)
+#pitch test print
+#print(processed_data_pitch)
+
 #endregion
 
 

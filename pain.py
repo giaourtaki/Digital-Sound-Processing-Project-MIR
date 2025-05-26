@@ -3,7 +3,7 @@
 # source ./soundvenv/bin/activate
 # to commit -> move pain.py to rep folder
 
-# Imports
+#region Imports
 import os
 
 import IPython.display as ipd
@@ -24,7 +24,7 @@ import seaborn as sns
 
 #import tensorflow as tf
 import utils
-
+#endregion
 
 # Data Frame Creation
 data = pd.read_csv('data/fma_metadata/raw_tracks.csv')
@@ -52,7 +52,8 @@ preprocess_data(data)
 
 # Feature Engineering (add essentia stuff)
 
-#region edw epilegw poia tragoudia epeksergazomai
+#region track id to path mapping
+
 # first, check which song ids we process
 track_ids = data['track_id'].astype(int)
 
@@ -119,10 +120,10 @@ for track_id, filepath in track_id_to_path.items():
 #print(eqloud_loaded_audio)
 #endregion
 
-#region track feature extracting / processing 
+#region yin pitch extraction
 
 #pitch extraction
-def extract_pitch(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
+def extract_pitch_yin(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
 
     processed_data_pitch = {}
 
@@ -138,7 +139,7 @@ def extract_pitch(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sample_ra
         # Process audio in frames with feedback
         duration_sec = len(audio) / sample_rate
         num_frames = (len(audio) - frame_size) // hop_size
-        print(f"[{idx}/{total_tracks}] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
+        print(f"[{idx}/{total_tracks}] [Yin] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
 
         for i in range(0, len(audio) - frame_size, hop_size):
             frame = audio[i:i + frame_size]
@@ -161,13 +162,12 @@ def extract_pitch(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sample_ra
         }
 
     return processed_data_pitch
-
-processed_data_pitch = extract_pitch(eqloud_loaded_audio)
+#Call the function to extract pitch using Yin
+processed_data_pitch = extract_pitch_yin(eqloud_loaded_audio)
 #pitch test print
 #print(processed_data_pitch)
 
 # Add pitch mean as a new feature to the original data DataFrame
-# First, ensure track_id is int for safe merging
 data['track_id'] = data['track_id'].astype(int)
 
 # Prepare pitch feature dataframe
@@ -195,7 +195,7 @@ for track_id, pitch_data in processed_data_pitch.items():
         'pitch_std': std_pitch
     })
 
-# Create DataFrame and merge with original data
+# Call the function to create DataFrame and merge pitch_yin with original data
 pitch_df = pd.DataFrame(pitch_features)
 # Keep only the rows with track_ids in processed_data_pitch
 data = data[data['track_id'].isin(processed_data_pitch.keys())]
@@ -203,7 +203,7 @@ data = pd.merge(data, pitch_df, on='track_id', how='left')
 
 
 # Test print
-print(data)
+#print(data)
 #print(len(data))
 #print(data[['track_id', 'pitch_mean', 'pitch_median', 'pitch_std']].head())
 #print("Pitch entries:", list(processed_data_pitch.keys())[:10])
@@ -211,6 +211,44 @@ print(data)
 #print(data.info())
 #endregion
 
+#region melody / predominant pitch extraction
+def extract_pitch_melodia(eqloud_loaded_audio, frame_size=2048, hop_size=128, sample_rate=44100):
+
+    processed_data_pitch_melodia = {}
+
+
+    melodia = es.PredominantPitchMelodia(frameSize=frame_size, hopSize=hop_size)
+    
+
+    
+    for idx, (track_id, audio) in enumerate(eqloud_loaded_audio.items(), start=1):
+        duration_sec = len(audio) / sample_rate
+        num_frames = (len(audio) - frame_size) // hop_size
+        total_tracks = len(eqloud_loaded_audio)
+        print(f"[{idx}/{total_tracks}] [Melodia] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
+
+        try:
+            pitch_values, pitch_confidence = melodia(audio)
+            pitch_times = np.arange(len(pitch_values)) * hop_size / sample_rate
+
+            processed_data_pitch_melodia[track_id] = {
+                'pitch_values': pitch_values,
+                'pitch_confidence': pitch_confidence,
+                'pitch_times': pitch_times
+            }
+
+        except Exception as e:
+            print(f"Error processing track {track_id}: {e}")
+            continue
+
+    return processed_data_pitch_melodia
+
+#Call the function to extract pitch using Melodia
+processed_data_pitch_melodia = extract_pitch_melodia(eqloud_loaded_audio)
+
+#Test print
+print(processed_data_pitch_melodia)
+#endregion
 
 # Create Features / Target Variables (Make flashcards)
 

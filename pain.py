@@ -33,7 +33,6 @@ data = pd.read_csv('data/fma_metadata/raw_tracks.csv')
 
 
 
-
 # Data Cleaning and Feature Engineering
 def preprocess_data(df):
     # remove irrelevant columns
@@ -120,17 +119,16 @@ for track_id, filepath in track_id_to_path.items():
 #print(eqloud_loaded_audio)
 #endregion
 
-#region yin pitch extraction
+#region yin pitch extraction -> Estimates the fundamental frequency given the frame of a monophonic music signal
 
-#pitch extraction
 def extract_pitch_yin(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
 
-    processed_data_pitch = {}
+    yin_processed_data_pitch = {}
 
     window = es.Windowing(type='hann') #Using Hann window 
     yin = es.PitchYin(frameSize=frame_size)
 
-    total_tracks = len(eqloud_loaded_audio)
+    total_tracks_len = len(eqloud_loaded_audio)
     for idx, (track_id, audio) in enumerate(eqloud_loaded_audio.items(), start=1):
         pitches = []
         confidences = []
@@ -139,7 +137,7 @@ def extract_pitch_yin(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sampl
         # Process audio in frames with feedback
         duration_sec = len(audio) / sample_rate
         num_frames = (len(audio) - frame_size) // hop_size
-        print(f"[{idx}/{total_tracks}] [Yin] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
+        print(f"[{idx}/{total_tracks_len}] [Yin] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
 
         for i in range(0, len(audio) - frame_size, hop_size):
             frame = audio[i:i + frame_size]
@@ -151,58 +149,75 @@ def extract_pitch_yin(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sampl
             confidences.append(confidence)
             times.append(i / sample_rate)
 
-            # Log progress every 10 seconds of audio
+            # Log progress every 10 seconds of audio TODO: this doesnt work
             if i % (sample_rate * 10) == 0 and i != 0:
                 print(f"    ↳ Processed {i / sample_rate:.1f}s")
 
-        processed_data_pitch[track_id] = {
-            'pitch_values': pitches,
-            'pitch_confidence': confidences,
-            'pitch_times': times
+        yin_processed_data_pitch[track_id] = {
+            'yin_pitch_values': pitches,
+            'yin_pitch_confidence': confidences,
+            'yin_pitch_times': times
         }
 
-    return processed_data_pitch
+    return yin_processed_data_pitch
 #Call the function to extract pitch using Yin
-processed_data_pitch = extract_pitch_yin(eqloud_loaded_audio)
+yin_processed_data_pitch = extract_pitch_yin(eqloud_loaded_audio)
 #pitch test print
-#print(processed_data_pitch)
+#print(yin_processed_data_pitch)
 
+#endregion
+
+#region yin pitch added to original data
 # Add pitch mean as a new feature to the original data DataFrame
 data['track_id'] = data['track_id'].astype(int)
 
 # Prepare pitch feature dataframe
-pitch_features = []
+yin_pitch_features = []
 
-for track_id, pitch_data in processed_data_pitch.items():
-    pitch_values = np.array(pitch_data['pitch_values'])
+for track_id, yin_pitch_data in yin_processed_data_pitch.items():
+    yin_pitch_values = np.array(yin_pitch_data['yin_pitch_values'])
+    yin_confidences = np.array(yin_pitch_data['yin_pitch_confidence'])
     
     # Filter out 0 Hz pitches (no pitch detected)
-    valid_pitches = pitch_values[pitch_values > 0]
+    valid_yin_pitches = yin_pitch_values[yin_pitch_values > 0]
+#TODO: check yin algorithm output types
+    
+    
+    if (len(valid_yin_pitches) > 0):
 
-    if len(valid_pitches) > 0:
-        mean_pitch = np.mean(valid_pitches)
-        median_pitch = np.median(valid_pitches)
-        std_pitch = np.std(valid_pitches)
+        yin_mean_confidence_threshold = np.mean(yin_confidences)
+
+       # yin_raw_pitches = valid_yin_pitches
+        yin_mean_pitch = np.mean(valid_yin_pitches)
+        yin_median_pitch = np.median(valid_yin_pitches)
+        yin_std_pitch = np.std(valid_yin_pitches)
     else:
-        mean_pitch = np.nan
-        median_pitch = np.nan
-        std_pitch = np.nan
+        yin_mean_confidence_threshold = np.nan
 
-    pitch_features.append({
+        #yin_raw_pitches = np.nan
+        yin_mean_pitch = np.nan
+        yin_median_pitch = np.nan
+        yin_std_pitch = np.nan
+
+    yin_pitch_features.append({
         'track_id': track_id,
-        'pitch_mean': mean_pitch,
-        'pitch_median': median_pitch,
-        'pitch_std': std_pitch
+       # 'yin_raw_pitches': yin_raw_pitches,
+        'yin_pitch_mean': yin_mean_pitch,
+        'yin_pitch_median': yin_median_pitch,
+        'yin_pitch_std': yin_std_pitch,
+        'yin_confidence_threshold': yin_mean_confidence_threshold
     })
 
 # Call the function to create DataFrame and merge pitch_yin with original data
-pitch_df = pd.DataFrame(pitch_features)
+pitch_df = pd.DataFrame(yin_pitch_features)
 # Keep only the rows with track_ids in processed_data_pitch
-data = data[data['track_id'].isin(processed_data_pitch.keys())]
+data = data[data['track_id'].isin(yin_processed_data_pitch.keys())]
 data = pd.merge(data, pitch_df, on='track_id', how='left')
 
 
 # Test print
+#cols = ['track_id','yin_pitch_median','yin_confidence_threshold']
+#print(data[cols])
 #print(data)
 #print(len(data))
 #print(data[['track_id', 'pitch_mean', 'pitch_median', 'pitch_std']].head())
@@ -211,7 +226,7 @@ data = pd.merge(data, pitch_df, on='track_id', how='left')
 #print(data.info())
 #endregion
 
-#region melody / predominant pitch extraction
+#region melody / predominant pitch extraction -> Estimates the fundamental frequency of the predominant melody from polyphonic music signals using the MELODIA algorithm
 def extract_pitch_melodia(eqloud_loaded_audio, frame_size=2048, hop_size=128, sample_rate=44100):
 
     processed_data_pitch_melodia = {}
@@ -244,11 +259,17 @@ def extract_pitch_melodia(eqloud_loaded_audio, frame_size=2048, hop_size=128, sa
     return processed_data_pitch_melodia
 
 #Call the function to extract pitch using Melodia
-processed_data_pitch_melodia = extract_pitch_melodia(eqloud_loaded_audio)
+#processed_data_pitch_melodia = extract_pitch_melodia(eqloud_loaded_audio)
 
 #Test print
-print(processed_data_pitch_melodia)
+#print(processed_data_pitch_melodia)
 #endregion
+
+#region melodia pitch added to original data
+
+
+#endregion
+
 
 # Create Features / Target Variables (Make flashcards)
 

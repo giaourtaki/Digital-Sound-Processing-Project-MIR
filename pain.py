@@ -119,6 +119,11 @@ for track_id, filepath in track_id_to_path.items():
 #print(eqloud_loaded_audio)
 #endregion
 
+"""
+=====================================
+|        Melody Features          |
+=====================================
+"""
 #region yin pitch extraction -> Estimates the fundamental frequency given the frame of a monophonic music signal
 
 def extract_pitch_yin(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
@@ -227,7 +232,7 @@ data = pd.merge(data, pitch_df, on='track_id', how='left')
 #endregion
 
 #region melody / predominant pitch extraction -> Estimates the fundamental frequency of the predominant melody from polyphonic music signals using the MELODIA algorithm
-def extract_pitch_melodia(eqloud_loaded_audio, frame_size=2048, hop_size=128, sample_rate=44100):
+def extract_pitch_melodia(eqloud_loaded_audio, frame_size=2048, hop_size=128, sample_rate=44100): #TODO: justify the hop size
 
     processed_data_pitch_melodia = {}
 
@@ -243,13 +248,13 @@ def extract_pitch_melodia(eqloud_loaded_audio, frame_size=2048, hop_size=128, sa
         print(f"[{idx}/{total_tracks}] [Melodia] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
 
         try:
-            pitch_values, pitch_confidence = melodia(audio)
-            pitch_times = np.arange(len(pitch_values)) * hop_size / sample_rate
+            melodia_pitch_values, melodia_pitch_confidence = melodia(audio)
+            melodia_pitch_times = np.arange(len(melodia_pitch_values)) * hop_size / sample_rate
 
             processed_data_pitch_melodia[track_id] = {
-                'pitch_values': pitch_values,
-                'pitch_confidence': pitch_confidence,
-                'pitch_times': pitch_times
+                'melodia_pitch_values': melodia_pitch_values,
+                'melodia_pitch_confidence': melodia_pitch_confidence,
+                'melodia_pitch_times': melodia_pitch_times
             }
 
         except Exception as e:
@@ -259,18 +264,129 @@ def extract_pitch_melodia(eqloud_loaded_audio, frame_size=2048, hop_size=128, sa
     return processed_data_pitch_melodia
 
 #Call the function to extract pitch using Melodia
-#processed_data_pitch_melodia = extract_pitch_melodia(eqloud_loaded_audio)
+processed_data_pitch_melodia = extract_pitch_melodia(eqloud_loaded_audio)
 
 #Test print
 #print(processed_data_pitch_melodia)
 #endregion
 
-#region melodia pitch added to original data
+#region melodia pitch added to original data #TODO: merge melodia results with original data
 
 
 #endregion
 
+#region MIDI Note Number (MNN) Statistics #TODO: check if this is correct
+def extract_mnn_stats(processed_data_pitch_melodia):
+    """
+    Given a dict
+      { track_id: {
+          'melodia_pitch_values': np.array([...Hz...]),
+          'melodia_pitch_confidence': np.array([...]),
+          'melodia_pitch_times': np.array([...])
+        }, ... }
+    convert each non-zero Hz pitch into MIDI note numbers,
+    round to the nearest semitone, and compute mean/median/std.
+    Returns a dict:
+      { track_id: {'mnn_mean':…, 'mnn_median':…, 'mnn_std':…}, … }
+    """
+    processed_data_mnn = {}
 
+    for track_id, pitch_data in processed_data_pitch_melodia.items():
+        freqs = np.array(pitch_data['melodia_pitch_values'])
+        # Keep only frames with a detected pitch > 0 Hz
+        freqs = freqs[freqs > 0]
+
+        if freqs.size > 0:
+            # Convert Hz -> MIDI note numbers (float)
+            mnn = 69 + 12 * np.log2(freqs / 440.0)
+            # Round to nearest integer semitone
+            mnn_int = np.round(mnn).astype(int)
+
+            processed_data_mnn[track_id] = {
+                'mnn_mean':   np.mean(mnn_int),
+                'mnn_median': np.median(mnn_int),
+                'mnn_std':    np.std(mnn_int)
+            }
+        else:
+            # No valid pitches detected
+            processed_data_mnn[track_id] = {
+                'mnn_mean':   np.nan,
+                'mnn_median': np.nan,
+                'mnn_std':    np.nan
+            }
+
+    return processed_data_mnn
+
+# Call it on your Melodia output:
+processed_data_mnn = extract_mnn_stats(processed_data_pitch_melodia)
+
+# Example: turn into a DataFrame and merge back into `data`
+mnn_features = [
+    dict(track_id=tid, **stats)
+    for tid, stats in processed_data_mnn.items()
+]
+mnn_df = pd.DataFrame(mnn_features)
+
+# Keep only processed tracks
+data = data[data['track_id'].isin(mnn_df['track_id'])]
+
+# Merge
+data = data.merge(mnn_df, on='track_id', how='left')
+
+# Test print
+#print(data[['track_id', 'mnn_mean', 'mnn_median', 'mnn_std']].head(10))
+#print(data.info())
+#print(data)
+#endregion
+
+"""
+=====================================
+|        Harmmony Features          |
+=====
+"""
+#region Inharmonicity extraction
+#endregion
+
+#region Chromagram extraction #TODO: check if this works/name variables better
+import numpy as np
+import essentia.standard as es
+
+from numpy import pad
+
+def extract_chromagram(mono_loaded_audio,
+                       frame_size=2048,
+                       hop_size=1024,
+                       sample_rate=44100):
+    processed_data_chromogram = {}
+
+    window   = es.Windowing(type='hann',   size=frame_size)
+    spectrum = es.Spectrum()
+    chroma   = es.Chromagram()  # expects CQT‐length spectrum
+
+    total = len(mono_loaded_audio)
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        print(f"[{idx}/{total}] [Chroma] Framing track {track_id}")
+
+        frames = []
+        for i in range(0, len(audio)-frame_size, hop_size):
+            frame = window(audio[i:i+frame_size])
+            spec  = spectrum(frame)            # length = 1025
+            # pad to 32768
+            spec_padded = pad(spec, (0, 32768 - spec.shape[0]), mode='constant')
+            c = chroma(spec_padded)            # now works
+            frames.append(c)
+
+        processed_data_chromogram[track_id] = np.vstack(frames) if frames else np.empty((0,12))
+
+    return processed_data_chromogram
+
+
+# Call it
+processed_data_chromogram = extract_chromagram(mono_loaded_audio)
+# Test print
+print(processed_data_chromogram)
+
+#endregion
 # Create Features / Target Variables (Make flashcards)
 
 

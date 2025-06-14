@@ -9,6 +9,7 @@ import os
 import IPython.display as ipd
 import pandas as pd
 import numpy as np
+from numpy import pad
 
 import librosa
 import librosa.display
@@ -61,7 +62,7 @@ base_dir = 'data/fma_small'
 # song_id_to_path to dictionary twn path pou exoun ola ta track paths pou thelw na epeksergastw
 track_id_to_path = {}
 count = 0
-track_limit = 10 #TODO: Limit to 10 tracks for testing; change to 100 for full processing
+track_limit = 5 #TODO: Limited to 5 tracks for testing; change to 100(other:see notes) for full processing
 
 # Walk through all subfolders and collect matching file paths
 for root, dirs, files in os.walk(base_dir):
@@ -124,7 +125,7 @@ for track_id, filepath in track_id_to_path.items():
 |        Melody Features          |
 =====================================
 """
-#region yin pitch extraction -> Estimates the fundamental frequency given the frame of a monophonic music signal
+#region Yin Pitch Extraction -> Estimates the fundamental frequency given the frame of a monophonic music signal
 
 def extract_pitch_yin(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
 
@@ -172,7 +173,7 @@ yin_processed_data_pitch = extract_pitch_yin(eqloud_loaded_audio)
 
 #endregion
 
-#region yin pitch added to original data
+#region Yin Pitch added to original data
 # Add pitch mean as a new feature to the original data DataFrame
 data['track_id'] = data['track_id'].astype(int)
 
@@ -231,7 +232,7 @@ data = pd.merge(data, pitch_df, on='track_id', how='left')
 #print(data.info())
 #endregion
 
-#region melody / predominant pitch extraction -> Estimates the fundamental frequency of the predominant melody from polyphonic music signals using the MELODIA algorithm
+#region Melody / Predominant pitch Extraction -> Estimates the fundamental frequency of the predominant melody from polyphonic music signals using the MELODIA algorithm
 def extract_pitch_melodia(eqloud_loaded_audio, frame_size=2048, hop_size=128, sample_rate=44100): #TODO: justify the hop size
 
     processed_data_pitch_melodia = {}
@@ -270,7 +271,7 @@ processed_data_pitch_melodia = extract_pitch_melodia(eqloud_loaded_audio)
 #print(processed_data_pitch_melodia)
 #endregion
 
-#region melodia pitch added to original data #TODO: merge melodia results with original data
+#region Melodia Pitch added to original data #TODO: merge melodia results with original data
 
 
 #endregion
@@ -342,16 +343,68 @@ data = data.merge(mnn_df, on='track_id', how='left')
 """
 =====================================
 |        Harmmony Features          |
-=====
+=====================================
 """
 #region Inharmonicity extraction
+def extract_inharmonicity(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
+    processed_data_inharmonicity = {}
+
+    window = es.Windowing(type='hann')
+    spectrum = es.Spectrum()
+    spectral_peaks = es.SpectralPeaks(magnitudeThreshold=0.0001, maxPeaks=100)
+    inharmonicity_extractor = es.Inharmonicity()
+
+    total_tracks = len(mono_loaded_audio)
+
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        duration_sec = len(audio) / sample_rate
+        num_frames = (len(audio) - frame_size) // hop_size
+        print(f"[{idx}/{total_tracks}] [Inharmonicity] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
+
+        inharmonicity_values = []
+
+        for i in range(0, len(audio) - frame_size, hop_size):
+            frame = audio[i:i + frame_size]
+            if len(frame) < frame_size:
+                break
+
+            windowed_frame = window(frame)
+            spec = spectrum(windowed_frame)
+            frequencies, magnitudes = spectral_peaks(spec)
+            # Skip frames with no valid peaks or 0 Hz fundamental
+            if len(frequencies) == 0 or frequencies[0] <= 0:
+                 continue
+            inh = inharmonicity_extractor(frequencies, magnitudes)
+            inharmonicity_values.append(inh)
+
+        # Compute statistics
+        if inharmonicity_values:
+            mean_inharmonicity = np.mean(inharmonicity_values)
+            median_inharmonicity = np.median(inharmonicity_values)
+            std_inharmonicity = np.std(inharmonicity_values)
+        else:
+            mean_inharmonicity = np.nan
+            median_inharmonicity = np.nan
+            std_inharmonicity = np.nan
+
+        processed_data_inharmonicity[track_id] = {
+            'inharmonicity_values': inharmonicity_values,
+            'inharmonicity_mean': mean_inharmonicity,
+            'inharmonicity_median': median_inharmonicity,
+            'inharmonicity_std': std_inharmonicity
+        }
+
+    return processed_data_inharmonicity
+# Call the function to extract inharmonicity
+processed_data_inharmonicity = extract_inharmonicity(mono_loaded_audio)
+# Test print
+#print(processed_data_inharmonicity)
 #endregion
 
 #region Chromagram extraction #TODO: check if this works/name variables better
-import numpy as np
-import essentia.standard as es
 
-from numpy import pad
+
+
 
 def extract_chromagram(mono_loaded_audio,
                        frame_size=2048,
@@ -365,7 +418,7 @@ def extract_chromagram(mono_loaded_audio,
 
     total = len(mono_loaded_audio)
     for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
-        print(f"[{idx}/{total}] [Chroma] Framing track {track_id}")
+        print(f"[{idx}/{total}] [Chroma] Processing track {track_id}")
 
         frames = []
         for i in range(0, len(audio)-frame_size, hop_size):
@@ -373,7 +426,7 @@ def extract_chromagram(mono_loaded_audio,
             spec  = spectrum(frame)            # length = 1025
             # pad to 32768
             spec_padded = pad(spec, (0, 32768 - spec.shape[0]), mode='constant')
-            c = chroma(spec_padded)            # now works
+            c = chroma(spec_padded)            
             frames.append(c)
 
         processed_data_chromogram[track_id] = np.vstack(frames) if frames else np.empty((0,12))
@@ -384,9 +437,350 @@ def extract_chromagram(mono_loaded_audio,
 # Call it
 processed_data_chromogram = extract_chromagram(mono_loaded_audio)
 # Test print
-print(processed_data_chromogram)
+#print(processed_data_chromogram)
 
 #endregion
+
+#region HPCP Extraction
+
+def extract_hpcp(mono_loaded_audio,
+                 frame_size=2048,
+                 hop_size=1024,
+                 sample_rate=44100,
+                 bins_per_octave=12,
+                 min_freq=50,
+                 max_freq=5000):
+    """
+    Returns { track_id: np.array(n_frames,12) } using HPCP (a chromagram).
+    """
+    processed_data_hpcp = {}
+
+    window       = es.Windowing(type='hann', size=frame_size)
+    spectrum     = es.Spectrum()
+    spectral_peaks = es.SpectralPeaks(orderBy='magnitude', magnitudeThreshold=0.01)
+    hpcp         = es.HPCP(size=bins_per_octave,
+                           minFrequency=min_freq,
+                           maxFrequency=max_freq,
+                           referenceFrequency=440.0)
+
+    total = len(mono_loaded_audio)
+    for idx, (tid, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        print(f"[{idx}/{total}] [HPCP] Processing track {tid}")
+        frames = []
+        for i in range(0, len(audio)-frame_size, hop_size):
+            frame = window(audio[i:i+frame_size])
+            spec  = spectrum(frame)
+            freqs, mags = spectral_peaks(spec)
+            c = hpcp(freqs, mags)  # yields 12-bin chroma
+            frames.append(c)
+
+        processed_data_hpcp[tid] = np.vstack(frames) if frames else np.empty((0, bins_per_octave))
+
+    return processed_data_hpcp
+
+# Call it
+processed_data_hpcp = extract_hpcp(mono_loaded_audio)
+# Test print
+#print(processed_data_hpcp)
+#endregion
+
+#region Key Extraction
+def extract_key(eqloud_loaded_audio, sample_rate=44100):
+    processed_data_key = {}
+    
+    key_extractor = es.KeyExtractor(sampleRate=sample_rate)
+
+    total_tracks = len(eqloud_loaded_audio)
+
+    for idx, (track_id, audio) in enumerate(eqloud_loaded_audio.items(), start=1):
+        duration_sec = len(audio) / sample_rate
+        print(f"[{idx}/{total_tracks}] [Key] Processing track {track_id} ({duration_sec:.1f}s)")
+
+        try:
+            key, scale, strength = key_extractor(audio)
+
+            processed_data_key[track_id] = {
+                'key': key,
+                'scale': scale,
+                'strength': strength
+            }
+
+        except Exception as e:
+            print(f"Error processing track {track_id}: {e}")
+            continue
+
+    return processed_data_key
+
+# Call the function to extract key
+processed_data_key = extract_key(mono_loaded_audio)
+# Test print
+#print(processed_data_key)
+#endregion
+"""
+=====================================
+|        Rythm Features          |
+=====================================
+"""
+#region BPM Extraction
+def extract_bpm(mono_loaded_audio, sample_rate=44100):
+    """
+    Extract BPM using RhythmExtractor2013 from mono audio.
+    Returns a dictionary with BPM per track.
+    """
+    processed_data_bpm = {}
+    rhythm_extractor = es.RhythmExtractor2013(method="multifeature")
+
+    total_tracks = len(mono_loaded_audio)
+
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        duration_sec = len(audio) / sample_rate
+        print(f"[{idx}/{total_tracks}] [BPM] Processing track {track_id} ({duration_sec:.1f}s)")
+
+        try:
+            bpm, ticks, _, _, _ = rhythm_extractor(audio)
+        except Exception as e:
+            print(f"Error processing BPM for track {track_id}: {e}")
+            bpm = None
+            ticks = []
+
+        processed_data_bpm[track_id] = {
+            'bpm': bpm,
+            'ticks': ticks
+        }
+
+    return processed_data_bpm
+# Call the function to extract BPM
+processed_data_bpm = extract_bpm(mono_loaded_audio)
+# Test print
+#print(processed_data_bpm)
+#endregion
+
+#region Onset Extraction
+def extract_onset_rate(mono_loaded_audio, sample_rate=44100):
+    """
+    Extract onset rate (number of onsets per second) from mono audio tracks.
+    Returns a dictionary with onset rate per track.
+    """
+    processed_data_onset_rate = {}
+
+    onset_rate_algo = es.OnsetRate()
+
+    total_tracks = len(mono_loaded_audio)
+
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        duration_sec = len(audio) / sample_rate
+        print(f"[{idx}/{total_tracks}] [Onset Rate] Processing track {track_id} ({duration_sec:.1f}s)")
+
+        try:
+            onset_rate = onset_rate_algo(audio)
+            processed_data_onset_rate[track_id] = {
+                'onset_rate': onset_rate
+            }
+        except Exception as e:
+            print(f"Error processing onset rate for track {track_id}: {e}")
+            processed_data_onset_rate[track_id] = {
+                'onset_rate': None
+            }
+
+    return processed_data_onset_rate
+# Call the function to extract onset rate
+
+processed_data_onset_rate = extract_onset_rate(mono_loaded_audio)
+# Test print
+#print(processed_data_onset_rate)
+#endregion
+
+#region Beat Histogram Extraction TODO: fucking fix this
+def extract_beat_histogram(mono_loaded_audio, frame_size=1024, hop_size=512, sample_rate=44100):
+    processed_data_beat_histogram = {}
+
+    windowing = es.Windowing(type='hann')
+    spectrum = es.Spectrum()
+    cartesian_to_polar = es.CartesianToPolar()
+    onset_detection = es.OnsetDetection(method='complex')
+    bpm_histogram_algo = es.BpmHistogram()
+
+    total_tracks = len(mono_loaded_audio)
+
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        duration_sec = len(audio) / sample_rate
+        print(f"[{idx}/{total_tracks}] [Beat Histogram] Processing track {track_id} ({duration_sec:.1f}s)")
+
+        novelty_curve = []
+
+        try:
+            for i in range(0, len(audio) - frame_size, hop_size):
+                frame = audio[i:i + frame_size]
+                windowed = windowing(frame)
+                spec = spectrum(windowed)
+                mag, phase = cartesian_to_polar(spec)
+                onset_val = onset_detection(mag, phase)
+                novelty_curve.append(float(onset_val))
+
+            if len(novelty_curve) == 0:
+                raise ValueError("Novelty curve (onset function) is empty.")
+
+            # Convert to plain Python float list
+            novelty_curve_floats = [float(x) for x in novelty_curve]
+
+            histogram, bpm1, bpm2 = bpm_histogram_algo(novelty_curve_floats)
+
+            processed_data_beat_histogram[track_id] = {
+                'beat_histogram': histogram,
+                'bpm_peak_1': bpm1,
+                'bpm_peak_2': bpm2
+            }
+
+        except Exception as e:
+            print(f"Error processing beat histogram for track {track_id}: {e}")
+            processed_data_beat_histogram[track_id] = {
+                'beat_histogram': None,
+                'bpm_peak_1': None,
+                'bpm_peak_2': None
+            }
+
+    return processed_data_beat_histogram
+# Call the function to extract onset rate
+
+#processed_data_beat_histogram = extract_beat_histogram(mono_loaded_audio)
+#Test print
+#print(processed_data_beat_histogram)
+#endregion
+
+"""
+=====================================
+|        Dynamic Features          |
+=====================================
+"""
+#region Loudness Mean Extraction
+def extract_loudness_mean(mono_loaded_audio, sample_rate=44100, frame_size=2048, hop_size=1024):
+    """
+    Extract mean loudness per track using Essentia Loudness algorithm.
+    Returns dict {track_id: mean loudness}
+    """
+    loudness_algo = es.Loudness()
+
+    processed_loudness = {}
+    total_tracks = len(mono_loaded_audio)
+
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        print(f"[{idx}/{total_tracks}] [Loudness Mean] Processing track {track_id}")
+
+        try:
+            loudness_values = []
+            for i in range(0, len(audio) - frame_size, hop_size):
+                frame = audio[i:i+frame_size]
+                loudness_val = loudness_algo(frame)
+                loudness_values.append(loudness_val)
+
+            mean_loudness = np.mean(loudness_values) if loudness_values else None
+            processed_loudness[track_id] = mean_loudness
+
+        except Exception as e:
+            print(f"Error processing loudness for track {track_id}: {e}")
+            processed_loudness[track_id] = None
+
+    return processed_loudness
+# Call the function to extract loudness mean
+processed_loudness_mean = extract_loudness_mean(mono_loaded_audio)
+# Test print
+#print(processed_loudness_mean)
+#endregion
+
+#region Dynamic Range Extraction
+def extract_dynamic_range(mono_loaded_audio, frame_size=2048, hop_size=1024):
+    """
+    Extract dynamic range (max RMS - min RMS) per track.
+    Returns dict {track_id: dynamic_range}
+    """
+    rms_algo = es.RMS()
+
+    processed_dynamic_range = {}
+    total_tracks = len(mono_loaded_audio)
+
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        print(f"[{idx}/{total_tracks}] [Dynamic Range] Processing track {track_id}")
+
+        try:
+            rms_values = []
+            for i in range(0, len(audio) - frame_size, hop_size):
+                frame = audio[i:i+frame_size]
+                rms_val = rms_algo(frame)
+                rms_values.append(rms_val)
+
+            if rms_values:
+                dynamic_range = max(rms_values) - min(rms_values)
+            else:
+                dynamic_range = None
+
+            processed_dynamic_range[track_id] = dynamic_range
+
+        except Exception as e:
+            print(f"Error processing dynamic range for track {track_id}: {e}")
+            processed_dynamic_range[track_id] = None
+
+    return processed_dynamic_range
+# Call the function to extract dynamic range
+processed_dynamic_range = extract_dynamic_range(mono_loaded_audio)
+# Test print
+#print(processed_dynamic_range)
+#endregion
+
+#region RMS Energy STD Extraction
+def extract_rms_energy_std(mono_loaded_audio, frame_size=2048, hop_size=1024):
+    """
+    Extract standard deviation of RMS energy per track.
+    Returns dict {track_id: rms_std}
+    """
+    rms_algo = es.RMS()
+
+    processed_rms_std = {}
+    total_tracks = len(mono_loaded_audio)
+
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        print(f"[{idx}/{total_tracks}] [RMS Energy Std] Processing track {track_id}")
+
+        try:
+            rms_values = []
+            for i in range(0, len(audio) - frame_size, hop_size):
+                frame = audio[i:i+frame_size]
+                rms_val = rms_algo(frame)
+                rms_values.append(rms_val)
+
+            rms_std = np.std(rms_values) if rms_values else None
+            processed_rms_std[track_id] = rms_std
+
+        except Exception as e:
+            print(f"Error processing RMS std for track {track_id}: {e}")
+            processed_rms_std[track_id] = None
+
+    return processed_rms_std
+# Call the function to extract RMS energy standard deviation
+processed_rms_energy_std = extract_rms_energy_std(mono_loaded_audio)
+# Test print
+#print(processed_rms_energy_std)
+#endregion
+
+
+"""
+=====================================
+|        Tone Colour Features          |
+=====================================
+"""
+
+"""
+=====================================
+|        Form Features          |
+=====================================
+"""
+
+
+"""
+=====================================
+|        High-Level Features          |
+=====================================
+"""
+
 # Create Features / Target Variables (Make flashcards)
 
 

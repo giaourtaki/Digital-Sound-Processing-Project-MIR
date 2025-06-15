@@ -54,6 +54,22 @@ preprocess_data(data)
 
 #region track id to path mapping
 
+
+def get_fma_small_ids(base_dir):
+    valid_ids = set()
+    for root, dirs, files in os.walk(base_dir):
+        for file in files:
+            if file.endswith('.mp3'):
+                try:
+                    tid = int(file.replace('.mp3', ''))
+                    valid_ids.add(tid)
+                except ValueError:
+                    continue
+    return valid_ids
+base_dir = 'data/fma_small'
+valid_track_ids = get_fma_small_ids(base_dir)
+
+
 # first, check which song ids we process
 track_ids = data['track_id'].astype(int)
 genres = data['track_genres']
@@ -65,27 +81,30 @@ genre_ids = {
     '10': 'Pop',
     '12': 'Rock',
     '31': 'Metal',
-    '5': 'Classical'
+    '25': 'Punk'
 }
 
-# Set limits for each genre
+# Set limits for each genre TODO: change this to 80 songs per genre
 genre_limits = {
-    'Pop': 5,
-    'Rock': 5,
-    'Metal': 5,
-    'Classical': 5
+    'Pop': 1,
+    'Rock': 1,
+    'Metal': 1,
+    'Punk': 1
 }
 genre_counts = {
     'Pop': 0,
     'Rock': 0,
     'Metal': 0,
-    'Classical': 0
+    'Punk': 0
 }
 
 track_id_to_genre = {}
 
 # Iterate through DataFrame to find tracks by genre
 for idx, row in data.iterrows():
+    tid = int(row['track_id'])
+    if tid not in valid_track_ids:
+        continue  # Skip if track ID is not in valid set
     genre_str = row['track_genres']
     for genre_id, genre_name in genre_ids.items():
         if f'"genre_id": "{genre_id}"' in genre_str or f"'genre_id': '{genre_id}'" in genre_str:
@@ -94,27 +113,46 @@ for idx, row in data.iterrows():
                 genre_counts[genre_name] += 1
             break  # Only count the track once
 
-print(f"Collected {len(track_id_to_genre)} tracks:")
-for tid, path in track_id_to_genre.items():
-    print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}")
+#Test print
+#print(f"Collected {len(track_id_to_genre)} tracks:")
+#print("track_id_to_genre:", track_id_to_genre)
+#for tid, path in track_id_to_genre.items():
+#    print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}")
 
 
 # Build path map from matched track_ids TODO: fix, i need all 5 songs for each genre, not just the first 5
-base_dir = 'data/fma_small'
 track_id_to_path = {}
 
-for root, dirs, files in os.walk(base_dir):
-    for file in files:
-        if file.endswith('.mp3'):
-            track_id = int(file.replace('.mp3', ''))
-            if track_id in track_id_to_genre:
-                full_path = os.path.join(root, file)
-                track_id_to_path[track_id] = full_path
+def collect_track_paths(base_dir, track_id_to_genre):
+    track_id_to_path = {}
+    
+    # Convert track IDs to a set for fast lookup
+    target_ids = set(track_id_to_genre.keys())
+    
+    for root, dirs, files in os.walk(base_dir):
+        for file in files:
+            if file.endswith('.mp3'):
+                try:
+                    # Extract track ID from filename (e.g., '000123.mp3' -> 123)
+                    track_id = int(file.replace('.mp3', ''))
+                    
+                    if track_id in target_ids:
+                        full_path = os.path.join(root, file)
+                        track_id_to_path[track_id] = full_path
+                except ValueError:
+                    # In case the filename is not a valid int
+                    continue
+    
+   # print(f"Found paths for {len(track_id_to_path)} out of {len(track_id_to_genre)} tracks.")
+    return track_id_to_path
 
+track_id_to_path = collect_track_paths(base_dir, track_id_to_genre)
 # Test print
 print(f"Collected {len(track_id_to_path)} tracks:")
-for tid, path in track_id_to_path.items():
-    print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}, Path: {path}")
+missing_ids = set(track_id_to_genre.keys()) - set(track_id_to_path.keys())
+print("Missing track IDs (no .mp3 file found):", missing_ids)
+#for tid, path in track_id_to_path.items():
+  #  print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}, Path: {path}")
 #print(len(track_id_to_path))
 #print(track_id_to_path)
 

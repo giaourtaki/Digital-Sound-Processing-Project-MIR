@@ -56,28 +56,65 @@ preprocess_data(data)
 
 # first, check which song ids we process
 track_ids = data['track_id'].astype(int)
+genres = data['track_genres']
+#print(genres)
 
-# build a map of song_id -> filepath by walking fma_small
+# Check if track is specific genre (e.g., Pop)
+# Define genre ID mapping
+genre_ids = {
+    '10': 'Pop',
+    '12': 'Rock',
+    '31': 'Metal',
+    '5': 'Classical'
+}
+
+# Set limits for each genre
+genre_limits = {
+    'Pop': 5,
+    'Rock': 5,
+    'Metal': 5,
+    'Classical': 5
+}
+genre_counts = {
+    'Pop': 0,
+    'Rock': 0,
+    'Metal': 0,
+    'Classical': 0
+}
+
+track_id_to_genre = {}
+
+# Iterate through DataFrame to find tracks by genre
+for idx, row in data.iterrows():
+    genre_str = row['track_genres']
+    for genre_id, genre_name in genre_ids.items():
+        if f'"genre_id": "{genre_id}"' in genre_str or f"'genre_id': '{genre_id}'" in genre_str:
+            if genre_counts[genre_name] < genre_limits[genre_name]:
+                track_id_to_genre[int(row['track_id'])] = genre_name
+                genre_counts[genre_name] += 1
+            break  # Only count the track once
+
+print(f"Collected {len(track_id_to_genre)} tracks:")
+for tid, path in track_id_to_genre.items():
+    print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}")
+
+
+# Build path map from matched track_ids TODO: fix, i need all 5 songs for each genre, not just the first 5
 base_dir = 'data/fma_small'
-# song_id_to_path to dictionary twn path pou exoun ola ta track paths pou thelw na epeksergastw
 track_id_to_path = {}
-count = 0
-track_limit = 5 #TODO: Limited to 5 tracks for testing; change to 100(other:see notes) for full processing
 
-# Walk through all subfolders and collect matching file paths
 for root, dirs, files in os.walk(base_dir):
     for file in files:
         if file.endswith('.mp3'):
             track_id = int(file.replace('.mp3', ''))
-            if track_id in track_ids:
+            if track_id in track_id_to_genre:
                 full_path = os.path.join(root, file)
                 track_id_to_path[track_id] = full_path
-                count += 1
-                if count >= track_limit:
-                    break
-    if count >= track_limit:
-        break
-#test print
+
+# Test print
+print(f"Collected {len(track_id_to_path)} tracks:")
+for tid, path in track_id_to_path.items():
+    print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}, Path: {path}")
 #print(len(track_id_to_path))
 #print(track_id_to_path)
 
@@ -664,7 +701,7 @@ def extract_loudness_mean(mono_loaded_audio, sample_rate=44100, frame_size=2048,
     total_tracks = len(mono_loaded_audio)
 
     for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
-        print(f"[{idx}/{total_tracks}] [Loudness Mean] Processing track {track_id}")
+        print(f"[{idx}/{total_tracks}] [Loudness] Processing track {track_id}")
 
         try:
             loudness_values = []
@@ -738,7 +775,7 @@ def extract_rms_energy_std(mono_loaded_audio, frame_size=2048, hop_size=1024):
     total_tracks = len(mono_loaded_audio)
 
     for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
-        print(f"[{idx}/{total_tracks}] [RMS Energy Std] Processing track {track_id}")
+        print(f"[{idx}/{total_tracks}] [RMS Energy] Processing track {track_id}")
 
         try:
             rms_values = []

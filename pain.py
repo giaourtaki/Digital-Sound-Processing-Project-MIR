@@ -39,7 +39,7 @@ data = pd.read_csv('data/fma_metadata/raw_tracks.csv')
 # Data Cleaning and Feature Engineering
 def preprocess_data(df):
     # remove irrelevant columns
-    df.drop(columns=['album_id', 'album_title', 'album_url', 'artist_id', 'artist_name', 'artist_url', 'artist_website', 'license_image_file', 'license_image_file_large', 'license_parent_id', 'license_title', 'license_url', 'tags', 'track_bit_rate', 'track_comments', 'track_composer', 'track_copyright_c', 'track_copyright_p', 'track_date_created', 'track_date_recorded', 'track_disc_number', 'track_duration', 'track_explicit', 'track_explicit_notes', 'track_favorites', 'track_image_file', 'track_information', 'track_instrumental', 'track_interest', 'track_language_code', 'track_listens', 'track_lyricist', 'track_number', 'track_publisher', 'track_title', 'track_url'], inplace=True)
+    df.drop(columns=['album_id', 'album_title', 'album_url', 'track_file', 'artist_id', 'artist_name', 'artist_url', 'artist_website', 'license_image_file', 'license_image_file_large', 'license_parent_id', 'license_title', 'license_url', 'tags', 'track_bit_rate', 'track_comments', 'track_composer', 'track_copyright_c', 'track_copyright_p', 'track_date_created', 'track_date_recorded', 'track_disc_number', 'track_duration', 'track_explicit', 'track_explicit_notes', 'track_favorites', 'track_image_file', 'track_information', 'track_instrumental', 'track_interest', 'track_language_code', 'track_listens', 'track_lyricist', 'track_number', 'track_publisher', 'track_title', 'track_url'], inplace=True)
 
     # remove empty genre columns
     df.dropna(subset=['track_genres'], inplace=True)
@@ -88,10 +88,10 @@ genre_ids = {
 
 # Set limits for each genre TODO: change this to 80 songs per genre
 genre_limits = {
-    'Pop': 1,
-    'Rock': 1,
-    'Metal': 1,
-    'Punk': 1
+    'Pop': 80,
+    'Rock': 80,
+    'Metal': 80,
+    'Punk': 80
 }
 genre_counts = {
     'Pop': 0,
@@ -119,7 +119,7 @@ for idx, row in data.iterrows():
 #print(f"Collected {len(track_id_to_genre)} tracks:")
 #print("track_id_to_genre:", track_id_to_genre)
 #for tid, path in track_id_to_genre.items():
-#    print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}")
+#print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}")
 
 
 # Build path map from matched track_ids TODO: fix, i need all 5 songs for each genre, not just the first 5
@@ -511,8 +511,6 @@ processed_data_inharmonicity = extract_inharmonicity(mono_loaded_audio)
 #region Chromagram extraction #TODO: check if this works/name variables better
 
 
-
-
 def extract_chromagram(mono_loaded_audio,
                        frame_size=2048,
                        hop_size=1024,
@@ -592,14 +590,14 @@ processed_data_hpcp = extract_hpcp(mono_loaded_audio)
 #endregion
 
 #region Key Extraction
-def extract_key(eqloud_loaded_audio, sample_rate=44100):
+def extract_key(mono_loaded_audio, sample_rate=44100):
     processed_data_key = {}
     
     key_extractor = es.KeyExtractor(sampleRate=sample_rate)
 
-    total_tracks = len(eqloud_loaded_audio)
+    total_tracks = len(mono_loaded_audio)
 
-    for idx, (track_id, audio) in enumerate(eqloud_loaded_audio.items(), start=1):
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
         duration_sec = len(audio) / sample_rate
         print(f"[{idx}/{total_tracks}] [Key] Processing track {track_id} ({duration_sec:.1f}s)")
 
@@ -766,7 +764,7 @@ def extract_dissonance_from_peaks(processed_spectral_peaks):
 
     return dissonance_data
 # Call the function to extract dissonance from spectral peaks
-#processed_data_dissonance = extract_dissonance_from_peaks(processed_spectral_peaks) TODO: remove comment, takes too long to run
+processed_data_dissonance = extract_dissonance_from_peaks(processed_spectral_peaks) #TODO: remove comment, takes too long to run
 # Test print
 #print(processed_data_dissonance)
 #endregion
@@ -1340,12 +1338,12 @@ processed_data_log_attack_time = extract_log_attack_time(mono_loaded_audio)
 #endregion
 
 #region Vibrato Extraction
-def extract_vibrato(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
+def extract_vibrato(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
     """
     Extract Vibrato Presence per track using Essentia's VibratoPresence algorithm.
 
     Parameters:
-        eqloud_loaded_audio (dict): Dictionary mapping track IDs to loaded audio arrays.
+        mono_loaded_audio (dict): Dictionary mapping track IDs to loaded audio arrays.
         frame_size (int): Frame size in samples for analysis.
         hop_size (int): Hop size in samples between frames.
         sample_rate (int): Sampling rate of the audio.
@@ -1359,8 +1357,8 @@ def extract_vibrato(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sample_
     window = es.Windowing(type='hann')
     vibrato = es.Vibrato()
 
-    total_tracks_len = len(eqloud_loaded_audio)
-    for idx, (track_id, audio) in enumerate(eqloud_loaded_audio.items(), start=1):
+    total_tracks_len = len(mono_loaded_audio)
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
         vibrato_values = []
         times = []
 
@@ -1608,7 +1606,7 @@ def merge_audio_features(feature_dicts, metadata_df, on="track_id"):
         - dict of named features
         - np.ndarray or list (1D or 2D)
         - scalar (float, int)
-        - tuple of (np.ndarray, np.ndarray) (e.g., spectral peaks: frequencies and magnitudes)
+        - tuple of (np.ndarray, np.ndarray)
     - metadata_df (pd.DataFrame): DataFrame containing metadata with 'track_id'.
     - on (str): Column to merge on.
 
@@ -1617,12 +1615,14 @@ def merge_audio_features(feature_dicts, metadata_df, on="track_id"):
     """
     feature_dfs = []
 
-    for feature_dict in feature_dicts:
+    for idx, feature_dict in enumerate(feature_dicts):
         first_val = next(iter(feature_dict.values()))
+        feature_prefix = f"feat_{idx}"
 
         if isinstance(first_val, dict):
             df = pd.DataFrame.from_dict(feature_dict, orient='index')
             df[on] = df.index.astype(int)
+            df = df.rename(columns=lambda col: f"{feature_prefix}_{col}" if col != on else col)
 
         elif isinstance(first_val, (np.ndarray, list)):
             flattened_rows = []
@@ -1636,8 +1636,7 @@ def merge_audio_features(feature_dicts, metadata_df, on="track_id"):
                     features = np.mean(arr.reshape(arr.shape[0], -1), axis=0)
                 else:
                     raise ValueError(f"Unsupported array shape {arr.shape} for track {track_id}")
-
-                feature_row = {f"f{i}": v for i, v in enumerate(features)}
+                feature_row = {f"{feature_prefix}_f{i}": v for i, v in enumerate(features)}
                 feature_row[on] = track_id
                 flattened_rows.append(feature_row)
             df = pd.DataFrame(flattened_rows)
@@ -1647,11 +1646,11 @@ def merge_audio_features(feature_dicts, metadata_df, on="track_id"):
             for track_id, (arr1, arr2) in feature_dict.items():
                 mean1 = np.mean(arr1) if isinstance(arr1, (np.ndarray, list)) and len(arr1) > 0 else np.nan
                 mean2 = np.mean(arr2) if isinstance(arr2, (np.ndarray, list)) and len(arr2) > 0 else np.nan
-                flattened_rows.append({on: track_id, "f0": mean1, "f1": mean2})
+                flattened_rows.append({on: track_id, f"{feature_prefix}_mean1": mean1, f"{feature_prefix}_mean2": mean2})
             df = pd.DataFrame(flattened_rows)
 
         elif isinstance(first_val, (float, int)):
-            df = pd.DataFrame([{on: tid, "value": val} for tid, val in feature_dict.items()])
+            df = pd.DataFrame([{on: tid, f"{feature_prefix}_value": val} for tid, val in feature_dict.items()])
 
         else:
             raise ValueError(f"Unsupported feature_dict format: {type(first_val)}")
@@ -1680,7 +1679,7 @@ data = merge_audio_features(
         processed_data_key,
         processed_data_chord_progression,
         processed_spectral_peaks,
-        # processed_data_dissonance,
+        processed_data_dissonance,
         processed_data_bpm,
         processed_data_onset_rate,
         # processed_data_beat_histogram,
@@ -1704,7 +1703,8 @@ data = merge_audio_features(
 )
 
 #Test print
-data.to_csv('processed_audio_features.csv', index=False)
+#data.to_csv('processed_audio_features.csv', index=False)
+#data.info()
 #endregion
 
 

@@ -17,6 +17,8 @@ import essentia
 import essentia.standard as es
 
 
+
+
 from sklearn.neighbors import KNeighborsClassifier
 import sklearn as skl 
 import sklearn.utils, sklearn.preprocessing, sklearn.decomposition, sklearn.svm, sklearn.model_selection, sklearn.metrics 
@@ -149,8 +151,8 @@ def collect_track_paths(base_dir, track_id_to_genre):
 track_id_to_path = collect_track_paths(base_dir, track_id_to_genre)
 # Test print
 print(f"Collected {len(track_id_to_path)} tracks:")
-missing_ids = set(track_id_to_genre.keys()) - set(track_id_to_path.keys())
-print("Missing track IDs (no .mp3 file found):", missing_ids)
+#missing_ids = set(track_id_to_genre.keys()) - set(track_id_to_path.keys())
+#print("Missing track IDs (no .mp3 file found):", missing_ids)
 #for tid, path in track_id_to_path.items():
   #  print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}, Path: {path}")
 #print(len(track_id_to_path))
@@ -218,7 +220,7 @@ def extract_pitch_yin(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sampl
         # Process audio in frames with feedback
         duration_sec = len(audio) / sample_rate
         num_frames = (len(audio) - frame_size) // hop_size
-        print(f"[{idx}/{total_tracks_len}] [Yin] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
+        print(f"[{idx}/{total_tracks_len}] [Yin Pitch] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
 
         for i in range(0, len(audio) - frame_size, hop_size):
             frame = audio[i:i + frame_size]
@@ -321,7 +323,7 @@ def extract_pitch_melodia(eqloud_loaded_audio, frame_size=2048, hop_size=128, sa
         duration_sec = len(audio) / sample_rate
         num_frames = (len(audio) - frame_size) // hop_size
         total_tracks = len(eqloud_loaded_audio)
-        print(f"[{idx}/{total_tracks}] [Melodia] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
+        print(f"[{idx}/{total_tracks}] [Melodia Pitch] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
 
         try:
             melodia_pitch_values, melodia_pitch_confidence = melodia(audio)
@@ -349,6 +351,43 @@ processed_data_pitch_melodia = extract_pitch_melodia(eqloud_loaded_audio)
 #region Melodia Pitch added to original data #TODO: merge melodia results with original data
 
 
+#endregion
+
+#region Melodia Pitch Range Extraction
+def extract_melodic_pitch_range(eqloud_loaded_audio, frame_size=2048, hop_size=128, sample_rate=44100, min_confidence=0.1):
+
+    melodic_pitch_range_data = {}
+    melodia = es.PredominantPitchMelodia(frameSize=frame_size, hopSize=hop_size)
+
+    for idx, (track_id, audio) in enumerate(eqloud_loaded_audio.items(), start=1):
+        duration_sec = len(audio) / sample_rate
+        total_tracks = len(eqloud_loaded_audio)
+        print(f"[{idx}/{total_tracks}] [Melodia Pitch Range] Processing track {track_id} ({duration_sec:.1f}s)")
+
+        try:
+            pitch_values, pitch_confidence = melodia(audio)
+
+            # Filter out invalid (0) pitch values and those below confidence threshold
+            valid_pitches = [p for p, c in zip(pitch_values, pitch_confidence) if p > 0 and c >= min_confidence]
+
+            if valid_pitches:
+                pitch_range = float(np.max(valid_pitches) - np.min(valid_pitches))
+            else:
+                pitch_range = 0.0  # No valid pitch values detected
+
+            melodic_pitch_range_data[track_id] = {
+                'melodic_pitch_range': pitch_range
+            }
+
+        except Exception as e:
+            print(f"Error processing track {track_id}: {e}")
+            continue
+
+    return melodic_pitch_range_data
+# Call the function to extract melodic pitch range
+processed_data_melodic_pitch_range = extract_melodic_pitch_range(eqloud_loaded_audio)
+# Test print
+#print(processed_data_melodic_pitch_range)
 #endregion
 
 #region MIDI Note Number (MNN) Statistics #TODO: check if this is correct
@@ -598,10 +637,7 @@ processed_data_key = extract_key(mono_loaded_audio)
 """
 #region BPM Extraction
 def extract_bpm(mono_loaded_audio, sample_rate=44100):
-    """
-    Extract BPM using RhythmExtractor2013 from mono audio.
-    Returns a dictionary with BPM per track.
-    """
+  
     processed_data_bpm = {}
     rhythm_extractor = es.RhythmExtractor2013(method="multifeature")
 
@@ -803,10 +839,7 @@ processed_dynamic_range = extract_dynamic_range(mono_loaded_audio)
 
 #region RMS Energy STD Extraction
 def extract_rms_energy_std(mono_loaded_audio, frame_size=2048, hop_size=1024):
-    """
-    Extract standard deviation of RMS energy per track.
-    Returns dict {track_id: rms_std}
-    """
+   
     rms_algo = es.RMS()
 
     processed_rms_std = {}
@@ -842,19 +875,296 @@ processed_rms_energy_std = extract_rms_energy_std(mono_loaded_audio)
 |        Tone Colour Features          |
 =====================================
 """
+#region MFCC Extraction
+def extract_mfcc(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
+    """
+    Extract MFCCs from raw audio using Essentia.
+    Input: dict {track_id: mono audio (VectorReal)}
+    Output: dict {track_id: {mfcc_coefficients, mfcc_bands, mfcc_times, mfcc_mean, mfcc_std}}
+    """
+    processed_data_mfcc = {}
 
+    window = es.Windowing(type='hann')
+    spectrum_algo = es.Spectrum()
+    mfcc = es.MFCC(inputSize=frame_size // 2 + 1)
+
+    total_tracks_len = len(mono_loaded_audio)
+
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        mfcc_coeffs = []
+        mfcc_bands = []
+        times = []
+
+        duration_sec = len(audio) / sample_rate
+        num_frames = (len(audio) - frame_size) // hop_size
+        print(f"[{idx}/{total_tracks_len}] [MFCC] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
+
+        for i in range(0, len(audio) - frame_size, hop_size):
+            frame = audio[i:i + frame_size]
+            if len(frame) < frame_size:
+                break
+
+            spectrum = spectrum_algo(window(frame))
+            bands, mfccs = mfcc(spectrum)
+            mfcc_bands.append(bands)
+            mfcc_coeffs.append(mfccs)
+            times.append(i / sample_rate)
+
+            if i % (sample_rate * 10) == 0 and i != 0:
+                print(f"    ↳ Processed {i / sample_rate:.1f}s")
+
+        # Calculate mean and std of MFCCs
+        if mfcc_coeffs:
+            mfcc_array = np.array(mfcc_coeffs)
+            mean = mfcc_array.mean(axis=0).tolist()
+            std = mfcc_array.std(axis=0).tolist()
+        else:
+            mean = []
+            std = []
+
+        processed_data_mfcc[track_id] = {
+            'mfcc_coefficients': mfcc_coeffs,
+            'mfcc_bands': mfcc_bands,
+            'mfcc_times': times,
+            'mfcc_mean': mean,
+            'mfcc_std': std
+        }
+
+    return processed_data_mfcc
+
+# Call the function to extract MFCCs
+processed_data_mfcc = extract_mfcc(mono_loaded_audio)
+# Test print
+#print(processed_data_mfcc)
+#endregion
+
+#region Spectral Centroid Extraction
+def extract_spectral_centroid(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
+    """
+    Extract spectral centroid from preloaded mono audio.
+    Input: dict {track_id: mono audio (VectorReal)}
+    Output: dict {track_id: {centroid_values, times, centroid_mean, centroid_std}}
+    """
+    centroid_processed_data = {}
+
+    window = es.Windowing(type='hann')
+    spectrum_algo = es.Spectrum()
+    spectral_centroid = es.CentralMoments()
+
+    total_tracks_len = len(mono_loaded_audio)
+
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        print(f"[{idx}/{total_tracks_len}] [Spectral Centroid] Processing track {track_id}")
+
+        centroids = []
+        times = []
+
+        for i in range(0, len(audio) - frame_size, hop_size):
+            frame = audio[i:i + frame_size]
+            if len(frame) < frame_size:
+                break
+
+            spectrum = spectrum_algo(window(frame))
+            moments = spectral_centroid(spectrum)
+            centroid = moments[1]  # 1st moment is the centroid
+            centroids.append(centroid)
+            times.append(i / sample_rate)
+
+        if centroids:
+            centroid_array = np.array(centroids)
+            mean = centroid_array.mean().item()
+            std = centroid_array.std().item()
+        else:
+            mean = 0.0
+            std = 0.0
+
+        centroid_processed_data[track_id] = {
+            'centroid_values': centroids,
+            'centroid_times': times,
+            'centroid_mean': mean,
+            'centroid_std': std
+        }
+
+    return centroid_processed_data
+# Call the function to extract spectral centroid
+processed_data_spectral_centroid = extract_spectral_centroid(mono_loaded_audio) #TODO: CHECK WHY 0S
+# Test print
+#print(processed_data_spectral_centroid)
+
+#endregion
 """
 =====================================
 |        Form Features          |
 =====================================
 """
+#region Segment Count Extraction
+from scipy.signal import find_peaks
+def extract_segment_boundaries_and_novelty(eqloud_loaded_audio, frame_size=1024, hop_size=512, sample_rate=44100):
+    """
+    Returns per track:
+    - segment boundaries (seconds)
+    - onset envelope (novelty curve)
+    - audio duration (seconds)
+    """
+    segment_data = {}
 
+    window = es.Windowing(type='hann')
+    fft = es.FFT()
+    onset_detection = es.OnsetDetection(method='complex')
+
+    total_tracks_len = len(eqloud_loaded_audio)
+    for idx, (track_id, audio) in enumerate(eqloud_loaded_audio.items(), start=1):
+        print(f"[{idx}/{total_tracks_len}] Processing track {track_id}")
+
+        onset_env = []
+        for i in range(0, len(audio) - frame_size, hop_size):
+            frame = audio[i:i + frame_size]
+            w = window(frame)
+
+            fft_complex = fft(w)
+            mag = np.abs(fft_complex)
+            phase = np.angle(fft_complex)
+
+            onset_val = onset_detection(mag, phase)
+            onset_env.append(onset_val)
+
+        onset_env = np.array(onset_env)
+        peaks, _ = find_peaks(onset_env, height=0.3, distance=10)
+        segment_boundaries = [p * hop_size / sample_rate for p in peaks]
+
+        audio_duration = len(audio) / sample_rate
+
+        segment_data[track_id] = {
+            'segment_boundaries_sec': segment_boundaries,
+            'onset_envelope': onset_env,
+            'audio_duration_sec': audio_duration
+        }
+
+    return segment_data
+# Call the function to extract segment counts
+processed_segment_data = extract_segment_boundaries_and_novelty(eqloud_loaded_audio)
+# Test print
+#print(processed_data_segment_count)
+#endregion
+
+#region Segment Duration Extraction
+def extract_segment_durations_stats(segment_data):
+    """
+    Input:
+        segment_data: dict from extract_segment_boundaries_and_novelty
+    Returns:
+        dict per track:
+          - segment_durations (list of floats in seconds)
+          - mean_duration (float)
+          - std_duration (float)
+    """
+    durations_stats = {}
+
+    for track_id, data in segment_data.items():
+        boundaries = data['segment_boundaries_sec']
+        audio_length = data['audio_duration_sec']
+
+        # include start and end boundaries
+        all_boundaries = [0] + boundaries + [audio_length]
+
+        # calculate segment durations
+        durations = np.diff(all_boundaries)  # array of durations
+
+        durations_stats[track_id] = {
+            'segment_durations': durations.tolist(),
+            'mean_duration': float(np.mean(durations)),
+            'std_duration': float(np.std(durations))
+        }
+
+    return durations_stats
+# Call the function to extract segment durations stats
+processed_data_segment_durations = extract_segment_durations_stats(processed_segment_data)
+# Test print
+#print(processed_data_segment_durations)
+#endregion
+
+#region Novelty Curve Extraction
+def extract_novelty_stats(segment_data):
+    """
+    Input:
+      segment_data: dict from extract_segment_boundaries_and_novelty
+    Returns:
+      dict per track:
+        - onset_envelope (novelty curve) list of floats
+        - mean_onset (float)
+        - std_onset (float)
+    """
+    novelty_stats = {}
+
+    for track_id, data in segment_data.items():
+        onset_env = data['onset_envelope']
+        novelty_stats[track_id] = {
+            'onset_envelope': onset_env.tolist(),
+            'mean_onset': float(np.mean(onset_env)),
+            'std_onset': float(np.std(onset_env))
+        }
+
+    return novelty_stats
+# Call the function to extract novelty stats
+processed_data_novelty_stats = extract_novelty_stats(processed_segment_data)
+# Test print
+#print(processed_data_novelty_stats)
+#endregion
 
 """
 =====================================
 |        High-Level Features          |
 =====================================
 """
+
+#region Danceability Extraction
+def extract_danceability(track_id_to_path):
+  
+    danceability_data = {}
+
+    for idx, (track_id, filepath) in enumerate(track_id_to_path.items(), start=1):
+        print(f"[{idx}] [Danceability] Processing track {track_id} from {filepath}")
+
+        extractor = es.MusicExtractor()
+        features, _ = extractor(filepath)  
+        #print(sorted(features.descriptorNames()))
+
+        danceability = features['rhythm.danceability']
+        danceability_data[track_id] = {
+            'danceability': float(danceability)
+        }
+
+    return danceability_data
+# Call the function to extract danceability
+processed_data_danceability = extract_danceability(track_id_to_path)
+# Test print
+#print(processed_data_danceability)
+#endregion
+
+#region Dynamic Complexity Extraction
+def extract_dynamic_complexity(track_id_to_path):
+    dynamic_complexity_data = {}
+
+    for idx, (track_id, filepath) in enumerate(track_id_to_path.items(), start=1):
+        print(f"[{idx}] [Dynamic Complexity] Processing track {track_id} from {filepath}")
+
+        extractor = es.MusicExtractor()
+        features, _ = extractor(filepath)
+
+        dynamic_complexity = features['lowlevel.dynamic_complexity']
+        dynamic_complexity_data[track_id] = {
+            'dynamic_complexity': float(dynamic_complexity)
+        }
+
+    return dynamic_complexity_data
+
+# Call the function to extract dynamic complexity
+processed_data_dynamic_complexity = extract_dynamic_complexity(track_id_to_path)
+# Test print
+#print(processed_data_dynamic_complexity)
+#endregion
+
+#region 
 
 # Create Features / Target Variables (Make flashcards)
 

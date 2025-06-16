@@ -160,7 +160,7 @@ print(f"Collected {len(track_id_to_path)} tracks:")
 
 #endregion
 
-#region load audio files
+#region Load Audio Files
 
 #load mono audio files -> beat tracking, tempo estimation, onset detection, rhythmic analysis, uniform preprocessing
 mono_loaded_audio = {}
@@ -248,9 +248,7 @@ yin_processed_data_pitch = extract_pitch_yin(eqloud_loaded_audio)
 #pitch test print
 #print(yin_processed_data_pitch)
 
-#endregion
 
-#region Yin Pitch added to original data
 # Add pitch mean as a new feature to the original data DataFrame
 data['track_id'] = data['track_id'].astype(int)
 
@@ -296,7 +294,6 @@ pitch_df = pd.DataFrame(yin_pitch_features)
 # Keep only the rows with track_ids in processed_data_pitch
 data = data[data['track_id'].isin(yin_processed_data_pitch.keys())]
 data = pd.merge(data, pitch_df, on='track_id', how='left')
-
 
 # Test print
 #cols = ['track_id','yin_pitch_median','yin_confidence_threshold']
@@ -348,10 +345,6 @@ processed_data_pitch_melodia = extract_pitch_melodia(eqloud_loaded_audio)
 #print(processed_data_pitch_melodia)
 #endregion
 
-#region Melodia Pitch added to original data #TODO: merge melodia results with original data
-
-
-#endregion
 
 #region Melodia Pitch Range Extraction
 def extract_melodic_pitch_range(eqloud_loaded_audio, frame_size=2048, hop_size=128, sample_rate=44100, min_confidence=0.1):
@@ -630,14 +623,173 @@ processed_data_key = extract_key(mono_loaded_audio)
 # Test print
 #print(processed_data_key)
 #endregion
+
+#region Chord Extraction
+def extract_chord_progression_from_hpcp(processed_data_hpcp):
+    """
+    Extracts chord progression from precomputed HPCPs using Essentia's ChordsDetection algorithm.
+
+    Parameters:
+        processed_data_hpcp (dict): Dictionary mapping track IDs to numpy arrays of HPCP vectors (shape: n_frames x 12).
+
+    Returns:
+        dict: Dictionary mapping track IDs to lists of detected chord labels.
+    """
+
+    import essentia.standard as es
+
+    chord_progression_data = {}
+    chords_detector = es.ChordsDetection()
+
+    for idx, (track_id, hpcp_array) in enumerate(processed_data_hpcp.items(), start=1):
+        print(f"[{idx}/{len(processed_data_hpcp)}] [Chord Progression] Processing HPCP for track {track_id}")
+
+        try:
+            # Convert numpy array to list of lists if necessary
+            if hasattr(hpcp_array, 'tolist'):
+                hpcps = hpcp_array.tolist()
+            else:
+                hpcps = hpcp_array
+
+            # Validate shape
+            if not isinstance(hpcps, list) or not all(isinstance(v, (list, tuple)) for v in hpcps):
+                raise ValueError("HPCP data must be a list of lists (vector<vector<float>>)")
+
+            chord_labels = chords_detector(hpcps)
+
+            chord_progression_data[track_id] = {
+                'chord_progression': chord_labels
+            }
+
+        except Exception as e:
+            print(f"Error processing track {track_id}: {e}")
+            continue
+
+    return chord_progression_data
+
+# Call the function to extract chord progression from HPCP
+processed_data_chord_progression = extract_chord_progression_from_hpcp(processed_data_hpcp)
+# Test print
+#print(processed_data_chord_progression)
+#endregion
+
+#region Spectral Peaks Extraction
+def extract_spectral_peaks(mono_loaded_audio, frame_size=2048, hop_size=1024):
+    """
+    Extract average spectral peaks per track.
+    Returns {track_id: (sorted_avg_frequencies, sorted_avg_magnitudes)}
+    """
+    window = es.Windowing(type='hann')
+    spectrum = es.Spectrum()
+    spectral_peaks = es.SpectralPeaks(orderBy='frequency')
+
+    peak_data = {}
+
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        print(f"[{idx}/{len(mono_loaded_audio)}] [Peaks] Processing track {track_id}")
+
+        freqs_all = []
+        mags_all = []
+
+        for i in range(0, len(audio) - frame_size, hop_size):
+            frame = audio[i:i+frame_size]
+            windowed = window(frame)
+            spec = spectrum(windowed)
+            freqs, mags = spectral_peaks(spec)
+
+            freqs_all.append(freqs)
+            mags_all.append(mags)
+
+        if freqs_all and mags_all:
+            all_freqs = np.hstack(freqs_all)
+            all_mags = np.hstack(mags_all)
+
+            # Sort frequencies and magnitudes together
+            sorted_indices = np.argsort(all_freqs)
+            sorted_freqs = all_freqs[sorted_indices]
+            sorted_mags = all_mags[sorted_indices]
+
+            peak_data[track_id] = (sorted_freqs.tolist(), sorted_mags.tolist())
+        else:
+            peak_data[track_id] = ([], [])
+
+    return peak_data
+# Call the function to extract spectral peaks
+processed_spectral_peaks = extract_spectral_peaks(mono_loaded_audio)
+# Test print
+#print(processed_spectral_peaks)
+# Shorting Frequencies and Magnitudes Together for Dissonance extracion
+
+
+#end region
+#region Dissonance Extraction
+
+def extract_dissonance_from_peaks(processed_spectral_peaks):
+    """
+    Calculates dissonance from spectral peaks using Essentia's Dissonance algorithm.
+
+    Parameters:
+        processed_spectral_peaks (dict): Dictionary mapping track IDs to a tuple (frequencies, magnitudes),
+                                         where both are lists or numpy arrays sorted by frequency.
+
+    Returns:
+        dict: Dictionary mapping track IDs to scalar dissonance values.
+    """
+
+    dissonance_data = {}
+    dissonance_fn = es.Dissonance()
+
+    for idx, (track_id, (frequencies, magnitudes)) in enumerate(processed_spectral_peaks.items(), start=1):
+        print(f"[{idx}/{len(processed_spectral_peaks)}] [Dissonance] Processing track {track_id}")
+
+        try:
+            # Ensure lists and sorted
+            freqs = list(frequencies)
+            mags = list(magnitudes)
+
+            if len(freqs) < 2:
+                raise ValueError("Not enough spectral peaks for dissonance calculation")
+
+            if not all(freqs[i] <= freqs[i+1] for i in range(len(freqs)-1)):
+                raise ValueError("Frequencies must be sorted in ascending order")
+
+            # Call Essentia's dissonance function
+            dissonance_value = dissonance_fn(freqs, mags)
+
+            dissonance_data[track_id] = {
+                'dissonance': float(dissonance_value)
+            }
+
+        except Exception as e:
+            print(f"Error processing track {track_id}: {e}")
+            continue
+
+    return dissonance_data
+# Call the function to extract dissonance from spectral peaks
+#processed_data_dissonance = extract_dissonance_from_peaks(processed_spectral_peaks) TODO: remove comment, takes too long to run
+# Test print
+#print(processed_data_dissonance)
+#endregion
+
+
 """
 =====================================
 |        Rythm Features          |
 =====================================
 """
 #region BPM Extraction
-def extract_bpm(mono_loaded_audio, sample_rate=44100):
-  
+def extract_bpm(mono_loaded_audio, sample_rate=44100): 
+    """
+    Extracts BPM and standard deviation of instantaneous tempo from audio tracks.
+
+    Parameters:
+        mono_loaded_audio (dict): Mapping of track IDs to mono audio arrays.
+        sample_rate (int): Sampling rate of the audio (default 44100 Hz).
+
+    Returns:
+        dict: Mapping track IDs to {'bpm': float, 'ticks': list, 'tempo_std': float}
+    """
+    
     processed_data_bpm = {}
     rhythm_extractor = es.RhythmExtractor2013(method="multifeature")
 
@@ -649,14 +801,25 @@ def extract_bpm(mono_loaded_audio, sample_rate=44100):
 
         try:
             bpm, ticks, _, _, _ = rhythm_extractor(audio)
+
+            # Calculate standard deviation of instantaneous tempo
+            if len(ticks) >= 2:
+                iois = np.diff(ticks)  # Inter-Onset Intervals in seconds
+                instantaneous_bpms = 60.0 / iois  # Convert to BPM
+                tempo_std = float(np.std(instantaneous_bpms)) # Tempo Stability extraction
+            else:
+                tempo_std = None  # Not enough ticks to compute std
+
         except Exception as e:
             print(f"Error processing BPM for track {track_id}: {e}")
             bpm = None
             ticks = []
+            tempo_std = None
 
         processed_data_bpm[track_id] = {
             'bpm': bpm,
-            'ticks': ticks
+            'ticks': ticks,
+            'tempo_std': tempo_std
         }
 
     return processed_data_bpm
@@ -753,7 +916,7 @@ def extract_beat_histogram(mono_loaded_audio, frame_size=1024, hop_size=512, sam
     return processed_data_beat_histogram
 # Call the function to extract onset rate
 
-#processed_data_beat_histogram = extract_beat_histogram(mono_loaded_audio)
+#processed_data_beat_histogram = extract_beat_histogram(mono_loaded_audio) TODO: fucking fix this
 #Test print
 #print(processed_data_beat_histogram)
 #endregion
@@ -1014,7 +1177,7 @@ def extract_segment_boundaries_and_novelty(eqloud_loaded_audio, frame_size=1024,
 
     total_tracks_len = len(eqloud_loaded_audio)
     for idx, (track_id, audio) in enumerate(eqloud_loaded_audio.items(), start=1):
-        print(f"[{idx}/{total_tracks_len}] Processing track {track_id}")
+        print(f"[{idx}/{total_tracks_len}] [Boundaries & Novelty] Processing track {track_id}")
 
         onset_env = []
         for i in range(0, len(audio) - frame_size, hop_size):
@@ -1042,7 +1205,7 @@ def extract_segment_boundaries_and_novelty(eqloud_loaded_audio, frame_size=1024,
 
     return segment_data
 # Call the function to extract segment counts
-processed_segment_data = extract_segment_boundaries_and_novelty(eqloud_loaded_audio)
+processed_segment_data = extract_segment_boundaries_and_novelty(eqloud_loaded_audio) #TODO: logika thelei mono
 # Test print
 #print(processed_data_segment_count)
 #endregion
@@ -1059,10 +1222,11 @@ def extract_segment_durations_stats(segment_data):
           - std_duration (float)
     """
     durations_stats = {}
-
-    for track_id, data in segment_data.items():
+    total_tracks_len = len(eqloud_loaded_audio)
+    for idx, (track_id, data) in enumerate(segment_data.items(), start=1):
         boundaries = data['segment_boundaries_sec']
         audio_length = data['audio_duration_sec']
+        print(f"[{idx}/{total_tracks_len}] [Segment Duration] Processing track {track_id}")
 
         # include start and end boundaries
         all_boundaries = [0] + boundaries + [audio_length]
@@ -1084,7 +1248,7 @@ processed_data_segment_durations = extract_segment_durations_stats(processed_seg
 #endregion
 
 #region Novelty Curve Extraction
-def extract_novelty_stats(segment_data):
+def extract_novelty_stats(segment_data): #TODO: logika thelei mono
     """
     Input:
       segment_data: dict from extract_segment_boundaries_and_novelty
@@ -1095,8 +1259,9 @@ def extract_novelty_stats(segment_data):
         - std_onset (float)
     """
     novelty_stats = {}
-
-    for track_id, data in segment_data.items():
+    total_tracks_len = len(eqloud_loaded_audio)
+    for idx, (track_id, data) in enumerate(segment_data.items(), start=1):
+        print(f"[{idx}/{total_tracks_len}] [Novelty Curve] Processing track {track_id}")
         onset_env = data['onset_envelope']
         novelty_stats[track_id] = {
             'onset_envelope': onset_env.tolist(),
@@ -1109,6 +1274,275 @@ def extract_novelty_stats(segment_data):
 processed_data_novelty_stats = extract_novelty_stats(processed_segment_data)
 # Test print
 #print(processed_data_novelty_stats)
+#endregion
+
+"""
+=====================================
+|        Expressivity Features          |
+=====================================
+"""
+#region Log Attack Time Extraction
+def extract_log_attack_time(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
+    """
+    Extract Log Attack Time (LAT) per track using Essentia's LogAttackTime algorithm.
+
+    Parameters:
+        mono_loaded_audio (dict): Dictionary mapping track IDs to loaded audio arrays.
+        frame_size (int): Frame size in samples for analysis.
+        hop_size (int): Hop size in samples between frames.
+        sample_rate (int): Sampling rate of the audio.
+
+    Returns:
+        dict: Mapping track IDs to extracted Log Attack Time values per frame.
+    """
+
+    lat_processed_data = {}
+
+    window = es.Windowing(type='hann')
+    lat = es.LogAttackTime()
+
+    total_tracks_len = len(mono_loaded_audio)
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        lat_values = []
+        times = []
+
+        duration_sec = len(audio) / sample_rate
+        num_frames = (len(audio) - frame_size) // hop_size
+        print(f"[{idx}/{total_tracks_len}] [Log Attack Time] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
+
+        for i in range(0, len(audio) - frame_size, hop_size):
+            frame = audio[i:i + frame_size]
+            if len(frame) < frame_size:
+                break
+
+            # Apply windowing
+            windowed_frame = window(frame)
+
+            # Compute Log Attack Time
+            lat_value = lat(windowed_frame)
+            lat_values.append(lat_value)
+            times.append(i / sample_rate)
+
+            # Optional: log progress every 10 seconds (if needed)
+            if i % (sample_rate * 10) == 0 and i != 0:
+                print(f"    ↳ Processed {i / sample_rate:.1f}s")
+
+        lat_processed_data[track_id] = {
+            'log_attack_time_values': lat_values,
+            'log_attack_time_times': times
+        }
+
+    return lat_processed_data
+# Call the function to extract Log Attack Time
+processed_data_log_attack_time = extract_log_attack_time(mono_loaded_audio)
+# Test print
+#print(processed_data_log_attack_time)
+#endregion
+
+#region Vibrato Extraction
+def extract_vibrato(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
+    """
+    Extract Vibrato Presence per track using Essentia's VibratoPresence algorithm.
+
+    Parameters:
+        eqloud_loaded_audio (dict): Dictionary mapping track IDs to loaded audio arrays.
+        frame_size (int): Frame size in samples for analysis.
+        hop_size (int): Hop size in samples between frames.
+        sample_rate (int): Sampling rate of the audio.
+
+    Returns:
+        dict: Mapping track IDs to extracted Vibrato  values per frame.
+    """
+
+    vibrato_data = {}
+
+    window = es.Windowing(type='hann')
+    vibrato = es.Vibrato()
+
+    total_tracks_len = len(eqloud_loaded_audio)
+    for idx, (track_id, audio) in enumerate(eqloud_loaded_audio.items(), start=1):
+        vibrato_values = []
+        times = []
+
+        duration_sec = len(audio) / sample_rate
+        num_frames = (len(audio) - frame_size) // hop_size
+        print(f"[{idx}/{total_tracks_len}] [Vibrato] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
+
+        for i in range(0, len(audio) - frame_size, hop_size):
+            frame = audio[i:i + frame_size]
+            if len(frame) < frame_size:
+                break
+
+            # Apply windowing
+            windowed_frame = window(frame)
+
+            # Compute Vibrato 
+            vib_value = vibrato(windowed_frame)
+            vibrato_values.append(vib_value)
+            times.append(i / sample_rate)
+
+            # Optional: log progress every 10 seconds (can be disabled if needed)
+            if i % (sample_rate * 10) == 0 and i != 0:
+                print(f"    ↳ Processed {i / sample_rate:.1f}s")
+
+        vibrato_data[track_id] = {
+            'vibrato_values': vibrato_values,
+            'vibrato_times': times
+        }
+
+    return vibrato_data
+# Call the function to extract Vibrato Presence
+processed_data_vibrato = extract_vibrato(mono_loaded_audio)
+# Test print
+#print(processed_data_vibrato)
+#endregion
+
+
+"""
+=====================================
+|        Texture Features          |
+=====================================
+"""
+#region Spectral Flatness Extraction
+def extract_spectral_flatness(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
+    """
+    Compute average spectral flatness for each track.
+
+    Returns:
+        dict: Mapping track IDs to average spectral flatness.
+    """
+    flatness_data = {}
+
+    total_tracks = len(mono_loaded_audio)
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        print(f"[{idx}/{total_tracks}] [Spectral Flatness] Processing track {track_id}")
+
+        try:
+            # Convert to numpy array (Librosa expects float32)
+            audio_np = np.array(audio).astype(np.float32)
+            S_flat = librosa.feature.spectral_flatness(y=audio_np, n_fft=frame_size, hop_length=hop_size)
+            avg_flatness = float(np.mean(S_flat))
+
+        except Exception as e:
+            print(f"Error processing spectral flatness for track {track_id}: {e}")
+            avg_flatness = None
+
+        flatness_data[track_id] = {
+            'avg_spectral_flatness': avg_flatness
+        }
+
+    return flatness_data
+# Call the function to extract spectral flatness
+processed_data_spectral_flatness = extract_spectral_flatness(mono_loaded_audio)
+# Test print
+#print(processed_data_spectral_flatness)
+#endregion
+
+
+#region Tristimulus Extraction
+def extract_tristimulus(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
+    """
+    Extract average Tristimulus coefficients (T1, T2, T3) per track.
+
+    Returns:
+        dict: Mapping track IDs to average T1, T2, T3.
+    """
+    tristimulus_data = {}
+
+    window = es.Windowing(type='hann')
+    spectrum = es.Spectrum()
+    hpcp = es.HarmonicPeaks()
+    trist = es.Tristimulus()
+
+    total_tracks = len(mono_loaded_audio)
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        print(f"[{idx}/{total_tracks}] [Tristimulus] Processing track {track_id}")
+
+        t1_vals, t2_vals, t3_vals = [], [], []
+
+        for i in range(0, len(audio) - frame_size, hop_size):
+            frame = audio[i:i + frame_size]
+            if len(frame) < frame_size:
+                break
+
+            spec = spectrum(window(frame))
+            freq, mag = es.SpectralPeaks()(spec)
+
+            if len(freq) >= 3:  # Needs at least 3 partials
+                try:
+                    t1, t2, t3 = trist(freq, mag)
+                    t1_vals.append(t1)
+                    t2_vals.append(t2)
+                    t3_vals.append(t3)
+                except:
+                    continue
+
+        if t1_vals:
+            tristimulus_data[track_id] = {
+                'tristimulus_t1': float(np.mean(t1_vals)),
+                'tristimulus_t2': float(np.mean(t2_vals)),
+                'tristimulus_t3': float(np.mean(t3_vals))
+            }
+        else:
+            tristimulus_data[track_id] = {
+                'tristimulus_t1': None,
+                'tristimulus_t2': None,
+                'tristimulus_t3': None
+            }
+
+    return tristimulus_data
+# Call the function to extract Tristimulus coefficients
+processed_data_tristimulus = extract_tristimulus(mono_loaded_audio)
+# Test print
+#print(processed_data_tristimulus)
+#endregion
+
+
+#region Odd/Even Harmonic Energy Ratio Extraction
+def extract_odd_even_harmonic_ratio(mono_loaded_audio, frame_size=2048, hop_size=1024):
+    """
+    Extract average Odd-to-Even Harmonic Energy Ratio per track.
+
+    Returns:
+        dict: Mapping track IDs to average Odd/Even ratio.
+    """
+    harmonic_ratio_data = {}
+
+    window = es.Windowing(type='hann')
+    spectrum = es.Spectrum()
+    spectral_peaks = es.SpectralPeaks(orderBy='frequency')
+    odd_even_ratio = es.OddToEvenHarmonicEnergyRatio()
+
+    total_tracks = len(mono_loaded_audio)
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        print(f"[{idx}/{total_tracks}] [Odd Even Harmonics] Processing track {track_id}")
+
+        ratios = []
+
+        for i in range(0, len(audio) - frame_size, hop_size):
+            frame = audio[i:i + frame_size]
+            if len(frame) < frame_size:
+                break
+
+            try:
+                spec = spectrum(window(frame))
+                freqs, mags = spectral_peaks(spec)
+
+                if len(freqs) >= 2:
+                    ratio = odd_even_ratio(freqs, mags)
+                    ratios.append(ratio)
+            except:
+                continue
+
+        harmonic_ratio_data[track_id] = {
+            'odd_even_harmonic_ratio': float(np.mean(ratios)) if ratios else None
+        }
+
+    return harmonic_ratio_data
+# Call the function to extract Odd/Even Harmonic Energy Ratio
+processed_data_odd_even_harmonic_ratio = extract_odd_even_harmonic_ratio(mono_loaded_audio)
+# Test print
+#print(processed_data_odd_even_harmonic_ratio)
 #endregion
 
 """
@@ -1164,7 +1598,122 @@ processed_data_dynamic_complexity = extract_dynamic_complexity(track_id_to_path)
 #print(processed_data_dynamic_complexity)
 #endregion
 
-#region 
+#region Data Merge
+def merge_audio_features(feature_dicts, metadata_df, on="track_id"):
+    """
+    Merges multiple feature dictionaries and joins with metadata dataframe.
+
+    Parameters:
+    - feature_dicts (list): List of dicts {track_id: features}, where features can be:
+        - dict of named features
+        - np.ndarray or list (1D or 2D)
+        - scalar (float, int)
+        - tuple of (np.ndarray, np.ndarray) (e.g., spectral peaks: frequencies and magnitudes)
+    - metadata_df (pd.DataFrame): DataFrame containing metadata with 'track_id'.
+    - on (str): Column to merge on.
+
+    Returns:
+    - pd.DataFrame: Combined DataFrame with features and metadata.
+    """
+    feature_dfs = []
+
+    for feature_dict in feature_dicts:
+        first_val = next(iter(feature_dict.values()))
+
+        if isinstance(first_val, dict):
+            df = pd.DataFrame.from_dict(feature_dict, orient='index')
+            df[on] = df.index.astype(int)
+
+        elif isinstance(first_val, (np.ndarray, list)):
+            flattened_rows = []
+            for track_id, val in feature_dict.items():
+                arr = np.array(val)
+                if arr.ndim == 1:
+                    features = arr
+                elif arr.ndim == 2:
+                    features = np.mean(arr, axis=0)
+                elif arr.ndim == 3:
+                    features = np.mean(arr.reshape(arr.shape[0], -1), axis=0)
+                else:
+                    raise ValueError(f"Unsupported array shape {arr.shape} for track {track_id}")
+
+                feature_row = {f"f{i}": v for i, v in enumerate(features)}
+                feature_row[on] = track_id
+                flattened_rows.append(feature_row)
+            df = pd.DataFrame(flattened_rows)
+
+        elif isinstance(first_val, tuple):
+            flattened_rows = []
+            for track_id, (arr1, arr2) in feature_dict.items():
+                mean1 = np.mean(arr1) if isinstance(arr1, (np.ndarray, list)) and len(arr1) > 0 else np.nan
+                mean2 = np.mean(arr2) if isinstance(arr2, (np.ndarray, list)) and len(arr2) > 0 else np.nan
+                flattened_rows.append({on: track_id, "f0": mean1, "f1": mean2})
+            df = pd.DataFrame(flattened_rows)
+
+        elif isinstance(first_val, (float, int)):
+            df = pd.DataFrame([{on: tid, "value": val} for tid, val in feature_dict.items()])
+
+        else:
+            raise ValueError(f"Unsupported feature_dict format: {type(first_val)}")
+
+        feature_dfs.append(df)
+
+    merged_features = feature_dfs[0]
+    for df in feature_dfs[1:]:
+        merged_features = pd.merge(merged_features, df, on=on, how='outer')
+
+    metadata_df[on] = metadata_df[on].astype(int)
+    final_df = pd.merge(metadata_df, merged_features, on=on, how='inner')
+
+    return final_df
+
+
+
+data = merge_audio_features(
+    feature_dicts=[
+        processed_data_pitch_melodia,
+        processed_data_melodic_pitch_range,
+        processed_data_mnn,
+        processed_data_inharmonicity,
+        processed_data_chromogram,
+        processed_data_hpcp,
+        processed_data_key,
+        processed_data_chord_progression,
+        processed_spectral_peaks,
+        # processed_data_dissonance,
+        processed_data_bpm,
+        processed_data_onset_rate,
+        # processed_data_beat_histogram,
+        processed_loudness_mean,
+        processed_dynamic_range,
+        processed_rms_energy_std,
+        processed_data_mfcc,
+        processed_data_spectral_centroid,
+        processed_segment_data,
+        processed_data_segment_durations,
+        processed_data_novelty_stats,
+        processed_data_log_attack_time,
+        processed_data_vibrato,
+        processed_data_spectral_flatness,
+        processed_data_tristimulus,
+        processed_data_odd_even_harmonic_ratio,
+        processed_data_danceability,
+        processed_data_dynamic_complexity
+    ],
+    metadata_df=data
+)
+
+#Test print
+data.to_csv('processed_audio_features.csv', index=False)
+#endregion
+
+
+
+
+
+
+
+
 
 # Create Features / Target Variables (Make flashcards)
 

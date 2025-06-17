@@ -6,14 +6,15 @@
 #region Imports
 import os
 
+
 import IPython.display as ipd
 import pandas as pd
 import numpy as np
 from numpy import pad
 
 import librosa
-import librosa.display
-import essentia 
+#import librosa.display
+#import essentia 
 import essentia.standard as es
 
 
@@ -116,8 +117,8 @@ for idx, row in data.iterrows():
             break  # Only count the track once
 
 #Test print
-#print(f"Collected {len(track_id_to_genre)} tracks:")
-#print("track_id_to_genre:", track_id_to_genre)
+print(f"Collected {len(track_id_to_genre)} tracks:")
+print("track_id_to_genre:", track_id_to_genre)
 #for tid, path in track_id_to_genre.items():
 #print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}")
 
@@ -162,39 +163,52 @@ print(f"Collected {len(track_id_to_path)} tracks:")
 
 #region Load Audio Files
 
+
+def process():
+    mono_loaded_audio = {}
+
+
+    for track_id, filepath in track_id_to_path.items():
+        if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
+            print(f"Skipping invalid or empty file: {filepath}")
+            continue
+        try:
+            audio = es.MonoLoader(filename=filepath)()
+            mono_loaded_audio[track_id] = audio
+        except Exception as e:
+            print(f"Error loading {filepath} (track_id {track_id}): {e}")
+            continue
+    #test print
+    #print(len(mono_loaded_audio))
+    #print(mono_loaded_audio)
+
+    #load eqloud audio files -> pitch estimation, music transcription, chord detection, melodic analysis
+    eqloud_loaded_audio = {}
+
+    for track_id, filepath in track_id_to_path.items():
+        if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
+            print(f"Skipping invalid or empty file: {filepath}")
+            continue
+        try:
+            audio = es.EqloudLoader(filename=filepath, sampleRate=44100)()
+            eqloud_loaded_audio[track_id] = audio
+        except Exception as e:
+            print(f"Error loading {filepath} (track_id {track_id}): {e}")
+            continue
+    #test print
+    #print(len(eqloud_loaded_audio))
+    #print(eqloud_loaded_audio)
+    #Call the function to extract pitch using Yin
+    yin_processed_data_pitch = extract_pitch_yin(eqloud_loaded_audio)
+    #Call the function to extract pitch using Melodia
+    processed_data_pitch_melodia = extract_pitch_melodia(eqloud_loaded_audio)
+    # Call the function to extract melodic pitch range
+    processed_data_melodic_pitch_range = extract_melodic_pitch_range(eqloud_loaded_audio)
+    return 0
+
+
 #load mono audio files -> beat tracking, tempo estimation, onset detection, rhythmic analysis, uniform preprocessing
-mono_loaded_audio = {}
 
-for track_id, filepath in track_id_to_path.items():
-    if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
-        print(f"Skipping invalid or empty file: {filepath}")
-        continue
-    try:
-        audio = es.MonoLoader(filename=filepath)()
-        mono_loaded_audio[track_id] = audio
-    except Exception as e:
-        print(f"Error loading {filepath} (track_id {track_id}): {e}")
-        continue
-#test print
-#print(len(mono_loaded_audio))
-#print(mono_loaded_audio)
-
-#load eqloud audio files -> pitch estimation, music transcription, chord detection, melodic analysis
-eqloud_loaded_audio = {}
-
-for track_id, filepath in track_id_to_path.items():
-    if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
-        print(f"Skipping invalid or empty file: {filepath}")
-        continue
-    try:
-        audio = es.EqloudLoader(filename=filepath, sampleRate=44100)()
-        eqloud_loaded_audio[track_id] = audio
-    except Exception as e:
-        print(f"Error loading {filepath} (track_id {track_id}): {e}")
-        continue
-#test print
-#print(len(eqloud_loaded_audio))
-#print(eqloud_loaded_audio)
 #endregion
 
 """
@@ -243,8 +257,7 @@ def extract_pitch_yin(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sampl
         }
 
     return yin_processed_data_pitch
-#Call the function to extract pitch using Yin
-yin_processed_data_pitch = extract_pitch_yin(eqloud_loaded_audio)
+
 #pitch test print
 #print(yin_processed_data_pitch)
 
@@ -338,8 +351,7 @@ def extract_pitch_melodia(eqloud_loaded_audio, frame_size=2048, hop_size=128, sa
 
     return processed_data_pitch_melodia
 
-#Call the function to extract pitch using Melodia
-processed_data_pitch_melodia = extract_pitch_melodia(eqloud_loaded_audio)
+
 
 #Test print
 #print(processed_data_pitch_melodia)
@@ -377,8 +389,7 @@ def extract_melodic_pitch_range(eqloud_loaded_audio, frame_size=2048, hop_size=1
             continue
 
     return melodic_pitch_range_data
-# Call the function to extract melodic pitch range
-processed_data_melodic_pitch_range = extract_melodic_pitch_range(eqloud_loaded_audio)
+
 # Test print
 #print(processed_data_melodic_pitch_range)
 #endregion
@@ -764,7 +775,7 @@ def extract_dissonance_from_peaks(processed_spectral_peaks):
 
     return dissonance_data
 # Call the function to extract dissonance from spectral peaks
-processed_data_dissonance = extract_dissonance_from_peaks(processed_spectral_peaks) #TODO: remove comment, takes too long to run
+#processed_data_dissonance = extract_dissonance_from_peaks(processed_spectral_peaks) #TODO: remove comment, takes too long to run
 # Test print
 #print(processed_data_dissonance)
 #endregion
@@ -1390,7 +1401,7 @@ def extract_vibrato(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_ra
 
     return vibrato_data
 # Call the function to extract Vibrato Presence
-processed_data_vibrato = extract_vibrato(mono_loaded_audio)
+#processed_data_vibrato = extract_vibrato(mono_loaded_audio)
 # Test print
 #print(processed_data_vibrato)
 #endregion
@@ -1679,7 +1690,7 @@ data = merge_audio_features(
         processed_data_key,
         processed_data_chord_progression,
         processed_spectral_peaks,
-        processed_data_dissonance,
+        #processed_data_dissonance,
         processed_data_bpm,
         processed_data_onset_rate,
         # processed_data_beat_histogram,
@@ -1692,7 +1703,7 @@ data = merge_audio_features(
         processed_data_segment_durations,
         processed_data_novelty_stats,
         processed_data_log_attack_time,
-        processed_data_vibrato,
+        #processed_data_vibrato,
         processed_data_spectral_flatness,
         processed_data_tristimulus,
         processed_data_odd_even_harmonic_ratio,

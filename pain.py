@@ -5,7 +5,8 @@
 
 #region Imports
 import os
-
+import csv
+import json
 
 import IPython.display as ipd
 import pandas as pd
@@ -48,7 +49,7 @@ def preprocess_data(df):
     
     return df
 
-preprocess_data(data)
+data = preprocess_data(data)
 #print(data)
 # data.info()
 # print(data.isnull().sum())
@@ -123,8 +124,8 @@ print("track_id_to_genre:", track_id_to_genre)
 #print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}")
 
 
-# Build path map from matched track_ids TODO: fix, i need all 5 songs for each genre, not just the first 5
-track_id_to_path = {}
+# Build path map from matched track_ids 
+track_id_to_path_another_name = {}
 
 def collect_track_paths(base_dir, track_id_to_genre):
     track_id_to_path = {}
@@ -147,11 +148,12 @@ def collect_track_paths(base_dir, track_id_to_genre):
                     continue
     
    # print(f"Found paths for {len(track_id_to_path)} out of {len(track_id_to_genre)} tracks.")
+   
     return track_id_to_path
 
-track_id_to_path = collect_track_paths(base_dir, track_id_to_genre)
+track_id_to_path_another_name = collect_track_paths(base_dir, track_id_to_genre)
 # Test print
-print(f"Collected {len(track_id_to_path)} tracks:")
+print(f"Collected {len(track_id_to_path_another_name)} tracks:")
 #missing_ids = set(track_id_to_genre.keys()) - set(track_id_to_path.keys())
 #print("Missing track IDs (no .mp3 file found):", missing_ids)
 #for tid, path in track_id_to_path.items():
@@ -161,55 +163,7 @@ print(f"Collected {len(track_id_to_path)} tracks:")
 
 #endregion
 
-#region Load Audio Files
 
-
-def process():
-    mono_loaded_audio = {}
-
-
-    for track_id, filepath in track_id_to_path.items():
-        if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
-            print(f"Skipping invalid or empty file: {filepath}")
-            continue
-        try:
-            audio = es.MonoLoader(filename=filepath)()
-            mono_loaded_audio[track_id] = audio
-        except Exception as e:
-            print(f"Error loading {filepath} (track_id {track_id}): {e}")
-            continue
-    #test print
-    #print(len(mono_loaded_audio))
-    #print(mono_loaded_audio)
-
-    #load eqloud audio files -> pitch estimation, music transcription, chord detection, melodic analysis
-    eqloud_loaded_audio = {}
-
-    for track_id, filepath in track_id_to_path.items():
-        if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
-            print(f"Skipping invalid or empty file: {filepath}")
-            continue
-        try:
-            audio = es.EqloudLoader(filename=filepath, sampleRate=44100)()
-            eqloud_loaded_audio[track_id] = audio
-        except Exception as e:
-            print(f"Error loading {filepath} (track_id {track_id}): {e}")
-            continue
-    #test print
-    #print(len(eqloud_loaded_audio))
-    #print(eqloud_loaded_audio)
-    #Call the function to extract pitch using Yin
-    yin_processed_data_pitch = extract_pitch_yin(eqloud_loaded_audio)
-    #Call the function to extract pitch using Melodia
-    processed_data_pitch_melodia = extract_pitch_melodia(eqloud_loaded_audio)
-    # Call the function to extract melodic pitch range
-    processed_data_melodic_pitch_range = extract_melodic_pitch_range(eqloud_loaded_audio)
-    return 0
-
-
-#load mono audio files -> beat tracking, tempo estimation, onset detection, rhythmic analysis, uniform preprocessing
-
-#endregion
 
 """
 =====================================
@@ -262,61 +216,7 @@ def extract_pitch_yin(eqloud_loaded_audio, frame_size=2048, hop_size=1024, sampl
 #print(yin_processed_data_pitch)
 
 
-# Add pitch mean as a new feature to the original data DataFrame
-data['track_id'] = data['track_id'].astype(int)
 
-# Prepare pitch feature dataframe
-yin_pitch_features = []
-
-for track_id, yin_pitch_data in yin_processed_data_pitch.items():
-    yin_pitch_values = np.array(yin_pitch_data['yin_pitch_values'])
-    yin_confidences = np.array(yin_pitch_data['yin_pitch_confidence'])
-    
-    # Filter out 0 Hz pitches (no pitch detected)
-    valid_yin_pitches = yin_pitch_values[yin_pitch_values > 0]
-#TODO: check yin algorithm output types
-    
-    
-    if (len(valid_yin_pitches) > 0):
-
-        yin_mean_confidence_threshold = np.mean(yin_confidences)
-
-       # yin_raw_pitches = valid_yin_pitches
-        yin_mean_pitch = np.mean(valid_yin_pitches)
-        yin_median_pitch = np.median(valid_yin_pitches)
-        yin_std_pitch = np.std(valid_yin_pitches)
-    else:
-        yin_mean_confidence_threshold = np.nan
-
-        #yin_raw_pitches = np.nan
-        yin_mean_pitch = np.nan
-        yin_median_pitch = np.nan
-        yin_std_pitch = np.nan
-
-    yin_pitch_features.append({
-        'track_id': track_id,
-       # 'yin_raw_pitches': yin_raw_pitches,
-        'yin_pitch_mean': yin_mean_pitch,
-        'yin_pitch_median': yin_median_pitch,
-        'yin_pitch_std': yin_std_pitch,
-        'yin_confidence_threshold': yin_mean_confidence_threshold
-    })
-
-# Call the function to create DataFrame and merge pitch_yin with original data
-pitch_df = pd.DataFrame(yin_pitch_features)
-# Keep only the rows with track_ids in processed_data_pitch
-data = data[data['track_id'].isin(yin_processed_data_pitch.keys())]
-data = pd.merge(data, pitch_df, on='track_id', how='left')
-
-# Test print
-#cols = ['track_id','yin_pitch_median','yin_confidence_threshold']
-#print(data[cols])
-#print(data)
-#print(len(data))
-#print(data[['track_id', 'pitch_mean', 'pitch_median', 'pitch_std']].head())
-#print("Pitch entries:", list(processed_data_pitch.keys())[:10])
-#print("DataFrame track_ids:", data['track_id'].head(10).tolist())
-#print(data.info())
 #endregion
 
 #region Melody / Predominant pitch Extraction -> Estimates the fundamental frequency of the predominant melody from polyphonic music signals using the MELODIA algorithm
@@ -436,27 +336,9 @@ def extract_mnn_stats(processed_data_pitch_melodia):
 
     return processed_data_mnn
 
-# Call it on your Melodia output:
-processed_data_mnn = extract_mnn_stats(processed_data_pitch_melodia)
 
-# Example: turn into a DataFrame and merge back into `data`
-mnn_features = [
-    dict(track_id=tid, **stats)
-    for tid, stats in processed_data_mnn.items()
-]
-mnn_df = pd.DataFrame(mnn_features)
 
-# Keep only processed tracks
-data = data[data['track_id'].isin(mnn_df['track_id'])]
 
-# Merge
-data = data.merge(mnn_df, on='track_id', how='left')
-
-# Test print
-#print(data[['track_id', 'mnn_mean', 'mnn_median', 'mnn_std']].head(10))
-#print(data.info())
-#print(data)
-#endregion
 
 """
 =====================================
@@ -513,8 +395,7 @@ def extract_inharmonicity(mono_loaded_audio, frame_size=2048, hop_size=1024, sam
         }
 
     return processed_data_inharmonicity
-# Call the function to extract inharmonicity
-processed_data_inharmonicity = extract_inharmonicity(mono_loaded_audio)
+
 # Test print
 #print(processed_data_inharmonicity)
 #endregion
@@ -550,8 +431,7 @@ def extract_chromagram(mono_loaded_audio,
     return processed_data_chromogram
 
 
-# Call it
-processed_data_chromogram = extract_chromagram(mono_loaded_audio)
+
 # Test print
 #print(processed_data_chromogram)
 
@@ -594,8 +474,7 @@ def extract_hpcp(mono_loaded_audio,
 
     return processed_data_hpcp
 
-# Call it
-processed_data_hpcp = extract_hpcp(mono_loaded_audio)
+
 # Test print
 #print(processed_data_hpcp)
 #endregion
@@ -627,8 +506,7 @@ def extract_key(mono_loaded_audio, sample_rate=44100):
 
     return processed_data_key
 
-# Call the function to extract key
-processed_data_key = extract_key(mono_loaded_audio)
+
 # Test print
 #print(processed_data_key)
 #endregion
@@ -676,8 +554,7 @@ def extract_chord_progression_from_hpcp(processed_data_hpcp):
 
     return chord_progression_data
 
-# Call the function to extract chord progression from HPCP
-processed_data_chord_progression = extract_chord_progression_from_hpcp(processed_data_hpcp)
+
 # Test print
 #print(processed_data_chord_progression)
 #endregion
@@ -723,8 +600,7 @@ def extract_spectral_peaks(mono_loaded_audio, frame_size=2048, hop_size=1024):
             peak_data[track_id] = ([], [])
 
     return peak_data
-# Call the function to extract spectral peaks
-processed_spectral_peaks = extract_spectral_peaks(mono_loaded_audio)
+
 # Test print
 #print(processed_spectral_peaks)
 # Shorting Frequencies and Magnitudes Together for Dissonance extracion
@@ -774,8 +650,7 @@ def extract_dissonance_from_peaks(processed_spectral_peaks):
             continue
 
     return dissonance_data
-# Call the function to extract dissonance from spectral peaks
-#processed_data_dissonance = extract_dissonance_from_peaks(processed_spectral_peaks) #TODO: remove comment, takes too long to run
+
 # Test print
 #print(processed_data_dissonance)
 #endregion
@@ -832,8 +707,7 @@ def extract_bpm(mono_loaded_audio, sample_rate=44100):
         }
 
     return processed_data_bpm
-# Call the function to extract BPM
-processed_data_bpm = extract_bpm(mono_loaded_audio)
+
 # Test print
 #print(processed_data_bpm)
 #endregion
@@ -866,9 +740,7 @@ def extract_onset_rate(mono_loaded_audio, sample_rate=44100):
             }
 
     return processed_data_onset_rate
-# Call the function to extract onset rate
 
-processed_data_onset_rate = extract_onset_rate(mono_loaded_audio)
 # Test print
 #print(processed_data_onset_rate)
 #endregion
@@ -964,8 +836,7 @@ def extract_loudness_mean(mono_loaded_audio, sample_rate=44100, frame_size=2048,
             processed_loudness[track_id] = None
 
     return processed_loudness
-# Call the function to extract loudness mean
-processed_loudness_mean = extract_loudness_mean(mono_loaded_audio)
+
 # Test print
 #print(processed_loudness_mean)
 #endregion
@@ -1003,8 +874,7 @@ def extract_dynamic_range(mono_loaded_audio, frame_size=2048, hop_size=1024):
             processed_dynamic_range[track_id] = None
 
     return processed_dynamic_range
-# Call the function to extract dynamic range
-processed_dynamic_range = extract_dynamic_range(mono_loaded_audio)
+
 # Test print
 #print(processed_dynamic_range)
 #endregion
@@ -1035,8 +905,7 @@ def extract_rms_energy_std(mono_loaded_audio, frame_size=2048, hop_size=1024):
             processed_rms_std[track_id] = None
 
     return processed_rms_std
-# Call the function to extract RMS energy standard deviation
-processed_rms_energy_std = extract_rms_energy_std(mono_loaded_audio)
+
 # Test print
 #print(processed_rms_energy_std)
 #endregion
@@ -1104,8 +973,7 @@ def extract_mfcc(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=
 
     return processed_data_mfcc
 
-# Call the function to extract MFCCs
-processed_data_mfcc = extract_mfcc(mono_loaded_audio)
+
 # Test print
 #print(processed_data_mfcc)
 #endregion
@@ -1158,8 +1026,7 @@ def extract_spectral_centroid(mono_loaded_audio, frame_size=2048, hop_size=1024,
         }
 
     return centroid_processed_data
-# Call the function to extract spectral centroid
-processed_data_spectral_centroid = extract_spectral_centroid(mono_loaded_audio) #TODO: CHECK WHY 0S
+
 # Test print
 #print(processed_data_spectral_centroid)
 
@@ -1213,14 +1080,13 @@ def extract_segment_boundaries_and_novelty(eqloud_loaded_audio, frame_size=1024,
         }
 
     return segment_data
-# Call the function to extract segment counts
-processed_segment_data = extract_segment_boundaries_and_novelty(eqloud_loaded_audio) #TODO: logika thelei mono
+
 # Test print
 #print(processed_data_segment_count)
 #endregion
 
 #region Segment Duration Extraction
-def extract_segment_durations_stats(segment_data):
+def extract_segment_durations_stats(segment_data, eqloud_loaded_audio):
     """
     Input:
         segment_data: dict from extract_segment_boundaries_and_novelty
@@ -1250,14 +1116,13 @@ def extract_segment_durations_stats(segment_data):
         }
 
     return durations_stats
-# Call the function to extract segment durations stats
-processed_data_segment_durations = extract_segment_durations_stats(processed_segment_data)
+
 # Test print
 #print(processed_data_segment_durations)
 #endregion
 
 #region Novelty Curve Extraction
-def extract_novelty_stats(segment_data): #TODO: logika thelei mono
+def extract_novelty_stats(segment_data,eqloud_loaded_audio): #TODO: logika thelei mono
     """
     Input:
       segment_data: dict from extract_segment_boundaries_and_novelty
@@ -1279,8 +1144,7 @@ def extract_novelty_stats(segment_data): #TODO: logika thelei mono
         }
 
     return novelty_stats
-# Call the function to extract novelty stats
-processed_data_novelty_stats = extract_novelty_stats(processed_segment_data)
+
 # Test print
 #print(processed_data_novelty_stats)
 #endregion
@@ -1342,8 +1206,7 @@ def extract_log_attack_time(mono_loaded_audio, frame_size=2048, hop_size=1024, s
         }
 
     return lat_processed_data
-# Call the function to extract Log Attack Time
-processed_data_log_attack_time = extract_log_attack_time(mono_loaded_audio)
+
 # Test print
 #print(processed_data_log_attack_time)
 #endregion
@@ -1441,8 +1304,7 @@ def extract_spectral_flatness(mono_loaded_audio, frame_size=2048, hop_size=1024,
         }
 
     return flatness_data
-# Call the function to extract spectral flatness
-processed_data_spectral_flatness = extract_spectral_flatness(mono_loaded_audio)
+
 # Test print
 #print(processed_data_spectral_flatness)
 #endregion
@@ -1500,8 +1362,7 @@ def extract_tristimulus(mono_loaded_audio, frame_size=2048, hop_size=1024, sampl
             }
 
     return tristimulus_data
-# Call the function to extract Tristimulus coefficients
-processed_data_tristimulus = extract_tristimulus(mono_loaded_audio)
+
 # Test print
 #print(processed_data_tristimulus)
 #endregion
@@ -1548,8 +1409,7 @@ def extract_odd_even_harmonic_ratio(mono_loaded_audio, frame_size=2048, hop_size
         }
 
     return harmonic_ratio_data
-# Call the function to extract Odd/Even Harmonic Energy Ratio
-processed_data_odd_even_harmonic_ratio = extract_odd_even_harmonic_ratio(mono_loaded_audio)
+
 # Test print
 #print(processed_data_odd_even_harmonic_ratio)
 #endregion
@@ -1578,8 +1438,7 @@ def extract_danceability(track_id_to_path):
         }
 
     return danceability_data
-# Call the function to extract danceability
-processed_data_danceability = extract_danceability(track_id_to_path)
+
 # Test print
 #print(processed_data_danceability)
 #endregion
@@ -1601,8 +1460,7 @@ def extract_dynamic_complexity(track_id_to_path):
 
     return dynamic_complexity_data
 
-# Call the function to extract dynamic complexity
-processed_data_dynamic_complexity = extract_dynamic_complexity(track_id_to_path)
+
 # Test print
 #print(processed_data_dynamic_complexity)
 #endregion
@@ -1679,48 +1537,334 @@ def merge_audio_features(feature_dicts, metadata_df, on="track_id"):
 
 
 
-data = merge_audio_features(
-    feature_dicts=[
-        processed_data_pitch_melodia,
-        processed_data_melodic_pitch_range,
-        processed_data_mnn,
-        processed_data_inharmonicity,
-        processed_data_chromogram,
-        processed_data_hpcp,
-        processed_data_key,
-        processed_data_chord_progression,
-        processed_spectral_peaks,
-        #processed_data_dissonance,
-        processed_data_bpm,
-        processed_data_onset_rate,
-        # processed_data_beat_histogram,
-        processed_loudness_mean,
-        processed_dynamic_range,
-        processed_rms_energy_std,
-        processed_data_mfcc,
-        processed_data_spectral_centroid,
-        processed_segment_data,
-        processed_data_segment_durations,
-        processed_data_novelty_stats,
-        processed_data_log_attack_time,
-        #processed_data_vibrato,
-        processed_data_spectral_flatness,
-        processed_data_tristimulus,
-        processed_data_odd_even_harmonic_ratio,
-        processed_data_danceability,
-        processed_data_dynamic_complexity
-    ],
-    metadata_df=data
-)
 
-#Test print
-#data.to_csv('processed_audio_features.csv', index=False)
+
+
+
 #data.info()
 #endregion
 
 
 
+#region Process Load Audio Files
 
+def process(track_id_to_path,mono_loaded_audio, eqloud_loaded_audio):
+    #Call the function to extract pitch using Yin
+    yin_processed_data_pitch = extract_pitch_yin(eqloud_loaded_audio)
+    #Call the function to extract pitch using Melodia
+    processed_data_pitch_melodia = extract_pitch_melodia(eqloud_loaded_audio)
+    # Call the function to extract melodic pitch range
+    processed_data_melodic_pitch_range = extract_melodic_pitch_range(eqloud_loaded_audio)
+    # Call it on your Melodia output:
+    processed_data_mnn = extract_mnn_stats(processed_data_pitch_melodia)
+    # Call the function to extract inharmonicity
+    processed_data_inharmonicity = extract_inharmonicity(mono_loaded_audio)
+    # Call extract_chromagram
+    processed_data_chromogram = extract_chromagram(mono_loaded_audio)
+    # Call it
+    processed_data_hpcp = extract_hpcp(mono_loaded_audio)
+    # Call the function to extract key
+    processed_data_key = extract_key(mono_loaded_audio)
+    # Call the function to extract chord progression from HPCP
+    processed_data_chord_progression = extract_chord_progression_from_hpcp(processed_data_hpcp)
+    # Call the function to extract BPM
+    processed_data_bpm = extract_bpm(mono_loaded_audio)
+    # Call the function to extract spectral peaks
+    processed_spectral_peaks = extract_spectral_peaks(mono_loaded_audio)
+    # Call the function to extract onset rate
+    processed_data_onset_rate = extract_onset_rate(mono_loaded_audio)
+    # Call the function to extract loudness mean
+    processed_loudness_mean = extract_loudness_mean(mono_loaded_audio)
+    # Call the function to extract RMS energy standard deviation
+    processed_rms_energy_std = extract_rms_energy_std(mono_loaded_audio)
+    # Call the function to extract dynamic range
+    processed_dynamic_range = extract_dynamic_range(mono_loaded_audio)
+    # Call the function to extract MFCCs
+    processed_data_mfcc = extract_mfcc(mono_loaded_audio)
+    # Call the function to extract spectral centroid
+    processed_data_spectral_centroid = extract_spectral_centroid(mono_loaded_audio) #TODO: CHECK WHY 0S
+    # Call the function to extract segment counts
+    processed_segment_data = extract_segment_boundaries_and_novelty(eqloud_loaded_audio) 
+    # Call the function to extract segment durations stats
+    processed_data_segment_durations = extract_segment_durations_stats(processed_segment_data, eqloud_loaded_audio) 
+    # Call the function to extract novelty stats
+    processed_data_novelty_stats = extract_novelty_stats(processed_segment_data, eqloud_loaded_audio) 
+    # Call the function to extract Log Attack Time
+    processed_data_log_attack_time = extract_log_attack_time(mono_loaded_audio)
+    # Call the function to extract spectral flatness
+    processed_data_spectral_flatness = extract_spectral_flatness(mono_loaded_audio)
+    # Call the function to extract Tristimulus coefficients
+    processed_data_tristimulus = extract_tristimulus(mono_loaded_audio)
+    # Call the function to extract Odd/Even Harmonic Energy Ratio
+    processed_data_odd_even_harmonic_ratio = extract_odd_even_harmonic_ratio(mono_loaded_audio)
+    # Call the function to extract danceability
+    processed_data_danceability = extract_danceability(track_id_to_path)
+    # Call the function to extract dynamic complexity
+    processed_data_dynamic_complexity = extract_dynamic_complexity(track_id_to_path)
+    # Call the function to extract dissonance from spectral peaks
+    processed_data_dissonance = extract_dissonance_from_peaks(processed_spectral_peaks) #TODO: remove comment, takes too long to run
+
+
+ 
+
+    # Prepare pitch feature dataframe
+    yin_pitch_features = []
+
+    for track_id, yin_pitch_data in yin_processed_data_pitch.items():
+        yin_pitch_values = np.array(yin_pitch_data['yin_pitch_values'])
+        yin_confidences = np.array(yin_pitch_data['yin_pitch_confidence'])
+        
+        # Filter out 0 Hz pitches (no pitch detected)
+        valid_yin_pitches = yin_pitch_values[yin_pitch_values > 0]
+    #TODO: check yin algorithm output types
+        
+        
+        if (len(valid_yin_pitches) > 0):
+
+            yin_mean_confidence_threshold = np.mean(yin_confidences)
+
+        # yin_raw_pitches = valid_yin_pitches
+            yin_mean_pitch = np.mean(valid_yin_pitches)
+            yin_median_pitch = np.median(valid_yin_pitches)
+            yin_std_pitch = np.std(valid_yin_pitches)
+        else:
+            yin_mean_confidence_threshold = np.nan
+
+            #yin_raw_pitches = np.nan
+            yin_mean_pitch = np.nan
+            yin_median_pitch = np.nan
+            yin_std_pitch = np.nan
+
+        yin_pitch_features.append({
+            'track_id': track_id,
+        # 'yin_raw_pitches': yin_raw_pitches,
+            'yin_pitch_mean': yin_mean_pitch,
+            'yin_pitch_median': yin_median_pitch,
+            'yin_pitch_std': yin_std_pitch,
+            'yin_confidence_threshold': yin_mean_confidence_threshold
+        })
+
+    # Call the function to create DataFrame and merge pitch_yin with original data
+    #pitch_df = pd.DataFrame(yin_pitch_features)
+    # Keep only the rows with track_ids in processed_data_pitch
+    #data = data[data['track_id'].isin(yin_processed_data_pitch.keys())]
+    #data = pd.merge(data, pitch_df, on='track_id', how='left')
+    # Add pitch mean as a new feature to the original data DataFrame
+    #data['track_id'] = data['track_id'].astype(int)
+
+    # Test print
+    #cols = ['track_id','yin_pitch_median','yin_confidence_threshold']
+    #print(data[cols])
+    #print(data)
+    #print(len(data))
+    #print(data[['track_id', 'pitch_mean', 'pitch_median', 'pitch_std']].head())
+    #print("Pitch entries:", list(processed_data_pitch.keys())[:10])
+    #print("DataFrame track_ids:", data['track_id'].head(10).tolist())
+    #print(data.info())
+
+
+    # Example: turn into a DataFrame and merge back into `data` TODO: check what data is missin
+    #mnn_features = [
+      #  dict(track_id=tid, **stats)
+      #  for tid, stats in processed_data_mnn.items()
+    #]
+    #mnn_df = pd.DataFrame(mnn_features)
+
+    # Keep only processed tracks
+    #data = data[data['track_id'].isin(mnn_df['track_id'])]
+
+    # Merge
+    #data = data.merge(mnn_df, on='track_id', how='left')
+
+    # Test print
+    #print(data[['track_id', 'mnn_mean', 'mnn_median', 'mnn_std']].head(10))
+    #print(data.info())
+    #print(data)
+    
+
+    """ merged_data = merge_audio_features(
+        feature_dicts=[
+            yin_processed_data_pitch,
+            processed_data_pitch_melodia,
+            processed_data_melodic_pitch_range,
+            processed_data_mnn,
+            processed_data_inharmonicity,
+            processed_data_chromogram,
+            processed_data_hpcp,
+            processed_data_key,
+            processed_data_chord_progression,
+            processed_spectral_peaks,
+            processed_data_dissonance,
+            processed_data_bpm,
+            processed_data_onset_rate,
+            # processed_data_beat_histogram,
+            processed_loudness_mean,
+            processed_dynamic_range,
+            processed_rms_energy_std,
+            processed_data_mfcc,
+            processed_data_spectral_centroid,
+            processed_segment_data,
+            processed_data_segment_durations,
+            processed_data_novelty_stats,
+            processed_data_log_attack_time,
+            #processed_data_vibrato,
+            processed_data_spectral_flatness,
+            processed_data_tristimulus,
+            processed_data_odd_even_harmonic_ratio,
+            processed_data_danceability,
+            processed_data_dynamic_complexity
+        ],
+        metadata_df = data
+    )
+        merged_data.to_csv('processed_audio_features.csv', index=False)
+        """
+    return [
+            yin_processed_data_pitch,
+            processed_data_pitch_melodia,
+            processed_data_melodic_pitch_range,
+            processed_data_mnn,
+            processed_data_inharmonicity,
+            processed_data_chromogram,
+            processed_data_hpcp,
+            processed_data_key,
+            processed_data_chord_progression,
+            processed_spectral_peaks,
+            processed_data_dissonance,
+            processed_data_bpm,
+            processed_data_onset_rate,
+            # processed_data_beat_histogram,
+            processed_loudness_mean,
+            processed_dynamic_range,
+            processed_rms_energy_std,
+            processed_data_mfcc,
+            processed_data_spectral_centroid,
+            processed_segment_data,
+            processed_data_segment_durations,
+            processed_data_novelty_stats,
+            processed_data_log_attack_time,
+            #processed_data_vibrato,
+            processed_data_spectral_flatness,
+            processed_data_tristimulus,
+            processed_data_odd_even_harmonic_ratio,
+            processed_data_danceability,
+            processed_data_dynamic_complexity
+        ]
+
+
+
+
+def convert_to_serializable(obj):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.integer, np.int32, np.int64)):
+        return int(obj)
+    if isinstance(obj, (np.floating, np.float32, np.float64)):
+        return float(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, dict):
+        return {convert_to_serializable(k): convert_to_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [convert_to_serializable(i) for i in obj]
+    return obj
+
+def batch_process_audio(track_id_to_path, page=30, max_songs=None, json_filename='processed_audio_features.json'):
+    track_ids = list(track_id_to_path.keys())
+    total_processed = 0
+
+    fieldnames = [
+        "yin_processed_data_pitch",
+        "processed_data_pitch_melodia",
+        "processed_data_melodic_pitch_range",
+        "processed_data_mnn",
+        "processed_data_inharmonicity",
+        "processed_data_chromogram",
+        "processed_data_hpcp",
+        "processed_data_key",
+        "processed_data_chord_progression",
+        "processed_spectral_peaks",
+        "processed_data_bpm",
+        "processed_data_onset_rate",
+        "processed_loudness_mean",
+        "processed_dynamic_range",
+        "processed_rms_energy_std",
+        "processed_data_mfcc",
+        "processed_data_spectral_centroid",
+        "processed_segment_data",
+        "processed_data_segment_durations",
+        "processed_data_novelty_stats",
+        "processed_data_log_attack_time",
+        "processed_data_spectral_flatness",
+        "processed_data_tristimulus",
+        "processed_data_odd_even_harmonic_ratio",
+        "processed_data_danceability",
+        "processed_data_dynamic_complexity"
+    ]
+
+    with open(json_filename, 'w') as jsonfile:
+        jsonfile.write("[\n")  # start of JSON array
+        first_record = True
+
+        for batch_start in range(0, len(track_ids), page):
+            if max_songs is not None and total_processed >= max_songs:
+                break
+
+            batch_track_ids = track_ids[batch_start : batch_start + page]
+            batch_track_id_to_path = {tid: track_id_to_path[tid] for tid in batch_track_ids}
+
+            mono_loaded_audio = {}
+            eqloud_loaded_audio = {}
+            batch_count = 0
+
+            for track_id in batch_track_ids:
+                if max_songs is not None and total_processed >= max_songs:
+                    break
+
+                filepath = track_id_to_path[track_id]
+                if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
+                    continue
+
+                try:
+                    mono_audio = es.MonoLoader(filename=filepath)()
+                    eqloud_audio = es.EqloudLoader(filename=filepath, sampleRate=44100)()
+                    mono_loaded_audio[track_id] = mono_audio
+                    eqloud_loaded_audio[track_id] = eqloud_audio
+                    batch_count += 1
+                    total_processed += 1
+                except Exception:
+                    continue
+
+            if mono_loaded_audio or eqloud_loaded_audio:
+                print(f"Processing batch of {batch_count} tracks, batch starting at index {batch_start}")
+                batch_results = process(batch_track_id_to_path, mono_loaded_audio, eqloud_loaded_audio)
+
+                if batch_results and isinstance(batch_results[0], (list, tuple)):
+                    processed_list = batch_results
+                else:
+                    processed_list = [batch_results]
+
+                for result in processed_list:
+                    item = {}
+                    for i, key in enumerate(fieldnames):
+                        item[key] = convert_to_serializable(result[i]) if i < len(result) else None
+
+                    # Write comma before all but the first record to keep JSON valid
+                    if not first_record:
+                        jsonfile.write(",\n")
+                    else:
+                        first_record = False
+
+                    json.dump(item, jsonfile, indent=2)
+
+        jsonfile.write("\n]")  # end of JSON array
+
+    print(f'Data written incrementally to {json_filename}')
+
+batch_process_audio(track_id_to_path_another_name, page=10)  
+
+#load mono audio files -> beat tracking, tempo estimation, onset detection, rhythmic analysis, uniform preprocessing
+
+#endregion
 
 
 

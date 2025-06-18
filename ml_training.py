@@ -75,12 +75,18 @@ if __name__ == "__main__":
         total_batches_processed += 1
         print(f"\n--- Raw Batch {total_batches_processed} ---")
         for record_entry in batch_data:
-           # print(f"  Record ID: {record_entry['id']}")
-            #print(f"  Raw Data: {record_entry['data']}")
+            #print(f"  Record ID: {record_entry['id']}")
+            #if 'data' in record_entry:  
+               # if isinstance(record_entry['data'], dict):
+                    #print(f"  Feature Set: {record_entry['feature_set_name']}")   
+               # else:
+                    #print(f"Raw Data: {(record_entry)}")
+           # else:
+                #print(f"  NK print Raw Data: {list(record_entry['data'])}")
             total_records_processed += 1
         # For very large files, uncomment this to limit output
-        #if total_batches_processed >= 2: # Print only first 2 batches as an example
-            #break
+        if total_batches_processed >= 2: # Print only first 2 batches as an example
+            break
 
 
     if total_records_processed > 0:
@@ -89,41 +95,39 @@ if __name__ == "__main__":
         print("No records were processed. Check your file path and JSON structure.")
 
 def fixed_size_feature_transform(extracted_data, list_stats=['mean', 'std', 'min', 'max'], default_value=0.0):
-    """
-    Transforms a dictionary of extracted feature data into a fixed-size feature vector.
 
-    Args:
-        extracted_data (dict): Dictionary of raw or processed features (lists of numbers or scalars).
-        list_stats (list): Statistical functions to apply on list-type values.
-        default_value (float): Fallback value if a list is empty or unsupported stat is used.
-
-    Returns:
-        np.ndarray: Fixed-size vector of numerical features.
-    """
     features = []
     for key in sorted(extracted_data.keys()):
+        if key == 'genre':
+            continue  # Skip genre, it's not a numerical feature
         value = extracted_data[key]
         if isinstance(value, list):
-            arr = np.array(value, dtype=float)
+            try:
+                arr = np.array(value, dtype=float)
+            except ValueError:
+                arr = np.array([], dtype=float)
             if arr.size == 0:
                 features.extend([default_value] * len(list_stats))
             else:
                 for stat_type in list_stats:
-                    if stat_type == 'mean':
-                        features.append(np.mean(arr))
-                    elif stat_type == 'std':
-                        features.append(np.std(arr))
-                    elif stat_type == 'min':
-                        features.append(np.min(arr))
-                    elif stat_type == 'max':
-                        features.append(np.max(arr))
-                    elif stat_type == 'median':
-                        features.append(np.median(arr))
-                    else:
+                    try:
+                        if stat_type == 'mean':
+                            features.append(np.nanmean(arr))
+                        elif stat_type == 'std':
+                            features.append(np.nanstd(arr))
+                        elif stat_type == 'min':
+                            features.append(np.nanmin(arr))
+                        elif stat_type == 'max':
+                            features.append(np.nanmax(arr))
+                        elif stat_type == 'median':
+                            features.append(np.nanmedian(arr))
+                        else:
+                            features.append(default_value)
+                    except:
                         features.append(default_value)
         elif isinstance(value, (int, float)):
             features.append(float(value))
-    return np.array(features, dtype=float)
+    return np.nan_to_num(np.array(features, dtype=float), nan=default_value)
 #endregion
 
 #region Train Model
@@ -140,24 +144,8 @@ genre_label_map = {
 # This assumes each streamed record's data includes genre info like:
 # 'data': { ..., 'genre': [{'genre_id': '10', 'genre_title': 'Pop', ...}] }
 def label_func_from_streamed_record(record_entry):
-    """
-    Extracts genre label from a streamed record_entry.
 
-    Args:
-        record_entry (dict): A record entry from the JSON stream.
-            Expected format:
-                {
-                    'id': '12345',
-                    'data': {
-                        ..., 
-                        'genre': [{'genre_title': 'Pop', ...}]
-                    }
-                }
-
-    Returns:
-        int or None: Mapped integer label, or None if not found.
-    """
-    genre_list = record_entry['data'].get('genre')
+    genre_list = record_entry['data'].get('track_genres')
     if not genre_list or not isinstance(genre_list, list):
         return None
 
@@ -177,6 +165,7 @@ def train_scikit_learn_incrementally(data_stream_generator):
     print("Starting incremental training...")
     batch_count = 0
     total_records_trained = 0
+    skipped_batches = 0
 
     for batch_of_raw_records in data_stream_generator:
         if not batch_of_raw_records:
@@ -187,44 +176,57 @@ def train_scikit_learn_incrementally(data_stream_generator):
         y_batch_labels = []
 
         for record_entry in batch_of_raw_records:
-            features = fixed_size_feature_transform(record_entry['data'])
-            if features.size == 0:
+            # Ensure essential keys exist
+            if 'data' not in record_entry or not isinstance(record_entry['data'], dict):
+                print(f"Record {record_entry.get('id')} has no 'data' field.")
                 continue
 
             label = label_func_from_streamed_record(record_entry)
             if label is None:
+                print(f"Record {record_entry.get('id')} has no valid genre label.")
+                continue
+
+            features = fixed_size_feature_transform(record_entry['data'])
+            print(f"Record {record_entry.get('id')} has no usable features.")
+            if features.size == 0:
                 continue
 
             X_batch_features.append(features)
             y_batch_labels.append(label)
 
-        if X_batch_features:
-            X_batch = np.array(X_batch_features, dtype=float)
-            y_batch = np.array(y_batch_labels, dtype=int)
-        else:
-            print(f"Skipping empty processed batch {batch_count}.")
+        if not X_batch_features or not y_batch_labels:
+            print(f"Skipping empty or invalid batch {batch_count}.")
+            skipped_batches += 1
             continue
+
+        X_batch = np.array(X_batch_features, dtype=float)
+        y_batch = np.array(y_batch_labels, dtype=int)
 
         if not first_batch_processed:
             scaler.partial_fit(X_batch)
             X_batch_scaled = scaler.transform(X_batch)
             model.partial_fit(X_batch_scaled, y_batch, classes=all_possible_classes)
             first_batch_processed = True
-            print(f"Batch {batch_count}: Initial partial_fit performed.")
+            print(f"Batch {batch_count}: Initial partial_fit performed with {len(y_batch)} samples.")
         else:
             X_batch_scaled = scaler.transform(X_batch)
             model.partial_fit(X_batch_scaled, y_batch)
-            print(f"Batch {batch_count}: Subsequent partial_fit performed.")
+            print(f"Batch {batch_count}: Subsequent partial_fit performed with {len(y_batch)} samples.")
 
-        total_records_trained += X_batch.shape[0]
+        total_records_trained += len(y_batch)
 
-    print(f"\nIncremental training complete. Total records trained: {total_records_trained}")
+    if total_records_trained == 0:
+        print("No records were trained. Make sure your data includes valid features and genre labels.")
+    else:
+        print(f"\nIncremental training complete. Total records trained: {total_records_trained} from {batch_count} batches "
+            f"({skipped_batches} skipped).")
+
     return model, scaler
 
 # Usage:
 train_generator = stream_raw_json_data(
     json_file_path='processed_audio_features.json',
-    keys_to_extract=['f0_values', 'genre', 'processed_data_key'],  # genre must be extracted too
+    keys_to_extract=['track_genres', 'processed_data_key'],  # genre must be extracted too
     batch_size=128
 )
 
@@ -233,18 +235,7 @@ model, scaler = train_scikit_learn_incrementally(train_generator)
 #endregion
 #region Evaluate Model
 def evaluate_incremental_model(model, scaler, test_data_generator, target_labels_func):
-    """
-    Evaluates a trained incremental model on a stream of test data.
 
-    Args:
-        model: Trained scikit-learn model (e.g., SGDClassifier).
-        scaler: Fitted StandardScaler used during training.
-        test_data_generator: Generator yielding test data batches (same format as training).
-        target_labels_func: Function to generate target labels from each full record entry.
-
-    Returns:
-        Dictionary containing evaluation metrics.
-    """
     all_preds = []
     all_true = []
 
@@ -294,13 +285,13 @@ def genre_label_func(record_entry):
     genres = record_entry.get('data', {}).get('genre', [])
     if genres and isinstance(genres, list):
         genre_title = genres[0].get('genre_title')
-        return GENRE_TO_LABEL.get(genre_title, -1)  # -1 as default for unknowns
+        return GENRE_TO_LABEL.get(genre_title, -1)  
     return -1
 
 # Recreate test generator (ensure 'genre' is in keys_to_extract)
 test_generator = stream_raw_json_data(
     json_file_path='processed_audio_features.json',
-    keys_to_extract=['f0_values', 'genre', 'processed_data_key'], 
+    keys_to_extract=['track_genres', 'processed_data_key'], 
     batch_size=128,
 )
 

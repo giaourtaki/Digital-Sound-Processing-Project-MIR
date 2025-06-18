@@ -17,7 +17,7 @@ import librosa
 #import librosa.display
 #import essentia 
 import essentia.standard as es
-
+from scipy.signal import find_peaks
 
 
 
@@ -79,7 +79,6 @@ track_ids = data['track_id'].astype(int)
 genres = data['track_genres']
 #print(genres)
 
-# Check if track is specific genre (e.g., Pop)
 # Define genre ID mapping
 genre_ids = {
     '10': 'Pop',
@@ -294,20 +293,9 @@ def extract_melodic_pitch_range(eqloud_loaded_audio, frame_size=2048, hop_size=1
 #print(processed_data_melodic_pitch_range)
 #endregion
 
-#region MIDI Note Number (MNN) Statistics #TODO: check if this is correct
+#region MIDI Note Number (MNN) Statistics 
 def extract_mnn_stats(processed_data_pitch_melodia):
-    """
-    Given a dict
-      { track_id: {
-          'melodia_pitch_values': np.array([...Hz...]),
-          'melodia_pitch_confidence': np.array([...]),
-          'melodia_pitch_times': np.array([...])
-        }, ... }
-    convert each non-zero Hz pitch into MIDI note numbers,
-    round to the nearest semitone, and compute mean/median/std.
-    Returns a dict:
-      { track_id: {'mnn_mean':…, 'mnn_median':…, 'mnn_std':…}, … }
-    """
+    
     processed_data_mnn = {}
 
     for track_id, pitch_data in processed_data_pitch_melodia.items():
@@ -373,7 +361,7 @@ def extract_inharmonicity(mono_loaded_audio, frame_size=2048, hop_size=1024, sam
             frequencies, magnitudes = spectral_peaks(spec)
             # Skip frames with no valid peaks or 0 Hz fundamental
             if len(frequencies) == 0 or frequencies[0] <= 0:
-                 continue
+                continue
             inh = inharmonicity_extractor(frequencies, magnitudes)
             inharmonicity_values.append(inh)
 
@@ -400,13 +388,13 @@ def extract_inharmonicity(mono_loaded_audio, frame_size=2048, hop_size=1024, sam
 #print(processed_data_inharmonicity)
 #endregion
 
-#region Chromagram extraction #TODO: check if this works/name variables better
+#region Chromagram extraction 
 
 
 def extract_chromagram(mono_loaded_audio,
-                       frame_size=2048,
-                       hop_size=1024,
-                       sample_rate=44100):
+                    frame_size=2048,
+                    hop_size=1024,
+                    sample_rate=44100):
     processed_data_chromogram = {}
 
     window   = es.Windowing(type='hann',   size=frame_size)
@@ -440,12 +428,12 @@ def extract_chromagram(mono_loaded_audio,
 #region HPCP Extraction
 
 def extract_hpcp(mono_loaded_audio,
-                 frame_size=2048,
-                 hop_size=1024,
-                 sample_rate=44100,
-                 bins_per_octave=12,
-                 min_freq=50,
-                 max_freq=5000):
+                frame_size=2048,
+                hop_size=1024,
+                sample_rate=44100,
+                bins_per_octave=12,
+                min_freq=50,
+                max_freq=5000):
     """
     Returns { track_id: np.array(n_frames,12) } using HPCP (a chromagram).
     """
@@ -455,9 +443,9 @@ def extract_hpcp(mono_loaded_audio,
     spectrum     = es.Spectrum()
     spectral_peaks = es.SpectralPeaks(orderBy='magnitude', magnitudeThreshold=0.01)
     hpcp         = es.HPCP(size=bins_per_octave,
-                           minFrequency=min_freq,
-                           maxFrequency=max_freq,
-                           referenceFrequency=440.0)
+                        minFrequency=min_freq,
+                        maxFrequency=max_freq,
+                        referenceFrequency=440.0)
 
     total = len(mono_loaded_audio)
     for idx, (tid, audio) in enumerate(mono_loaded_audio.items(), start=1):
@@ -513,18 +501,7 @@ def extract_key(mono_loaded_audio, sample_rate=44100):
 
 #region Chord Extraction
 def extract_chord_progression_from_hpcp(processed_data_hpcp):
-    """
-    Extracts chord progression from precomputed HPCPs using Essentia's ChordsDetection algorithm.
-
-    Parameters:
-        processed_data_hpcp (dict): Dictionary mapping track IDs to numpy arrays of HPCP vectors (shape: n_frames x 12).
-
-    Returns:
-        dict: Dictionary mapping track IDs to lists of detected chord labels.
-    """
-
-    import essentia.standard as es
-
+ 
     chord_progression_data = {}
     chords_detector = es.ChordsDetection()
 
@@ -561,10 +538,6 @@ def extract_chord_progression_from_hpcp(processed_data_hpcp):
 
 #region Spectral Peaks Extraction
 def extract_spectral_peaks(mono_loaded_audio, frame_size=2048, hop_size=1024):
-    """
-    Extract average spectral peaks per track.
-    Returns {track_id: (sorted_avg_frequencies, sorted_avg_magnitudes)}
-    """
     window = es.Windowing(type='hann')
     spectrum = es.Spectrum()
     spectral_peaks = es.SpectralPeaks(orderBy='frequency')
@@ -610,16 +583,7 @@ def extract_spectral_peaks(mono_loaded_audio, frame_size=2048, hop_size=1024):
 #region Dissonance Extraction
 
 def extract_dissonance_from_peaks(processed_spectral_peaks):
-    """
-    Calculates dissonance from spectral peaks using Essentia's Dissonance algorithm.
 
-    Parameters:
-        processed_spectral_peaks (dict): Dictionary mapping track IDs to a tuple (frequencies, magnitudes),
-                                         where both are lists or numpy arrays sorted by frequency.
-
-    Returns:
-        dict: Dictionary mapping track IDs to scalar dissonance values.
-    """
 
     dissonance_data = {}
     dissonance_fn = es.Dissonance()
@@ -663,16 +627,6 @@ def extract_dissonance_from_peaks(processed_spectral_peaks):
 """
 #region BPM Extraction
 def extract_bpm(mono_loaded_audio, sample_rate=44100): 
-    """
-    Extracts BPM and standard deviation of instantaneous tempo from audio tracks.
-
-    Parameters:
-        mono_loaded_audio (dict): Mapping of track IDs to mono audio arrays.
-        sample_rate (int): Sampling rate of the audio (default 44100 Hz).
-
-    Returns:
-        dict: Mapping track IDs to {'bpm': float, 'ticks': list, 'tempo_std': float}
-    """
     
     processed_data_bpm = {}
     rhythm_extractor = es.RhythmExtractor2013(method="multifeature")
@@ -714,10 +668,6 @@ def extract_bpm(mono_loaded_audio, sample_rate=44100):
 
 #region Onset Extraction
 def extract_onset_rate(mono_loaded_audio, sample_rate=44100):
-    """
-    Extract onset rate (number of onsets per second) from mono audio tracks.
-    Returns a dictionary with onset rate per track.
-    """
     processed_data_onset_rate = {}
 
     onset_rate_algo = es.OnsetRate()
@@ -809,10 +759,7 @@ def extract_beat_histogram(mono_loaded_audio, frame_size=1024, hop_size=512, sam
 """
 #region Loudness Mean Extraction
 def extract_loudness_mean(mono_loaded_audio, sample_rate=44100, frame_size=2048, hop_size=1024):
-    """
-    Extract mean loudness per track using Essentia Loudness algorithm.
-    Returns dict {track_id: mean loudness}
-    """
+
     loudness_algo = es.Loudness()
 
     processed_loudness = {}
@@ -843,10 +790,7 @@ def extract_loudness_mean(mono_loaded_audio, sample_rate=44100, frame_size=2048,
 
 #region Dynamic Range Extraction
 def extract_dynamic_range(mono_loaded_audio, frame_size=2048, hop_size=1024):
-    """
-    Extract dynamic range (max RMS - min RMS) per track.
-    Returns dict {track_id: dynamic_range}
-    """
+
     rms_algo = es.RMS()
 
     processed_dynamic_range = {}
@@ -881,7 +825,7 @@ def extract_dynamic_range(mono_loaded_audio, frame_size=2048, hop_size=1024):
 
 #region RMS Energy STD Extraction
 def extract_rms_energy_std(mono_loaded_audio, frame_size=2048, hop_size=1024):
-   
+
     rms_algo = es.RMS()
 
     processed_rms_std = {}
@@ -918,11 +862,7 @@ def extract_rms_energy_std(mono_loaded_audio, frame_size=2048, hop_size=1024):
 """
 #region MFCC Extraction
 def extract_mfcc(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
-    """
-    Extract MFCCs from raw audio using Essentia.
-    Input: dict {track_id: mono audio (VectorReal)}
-    Output: dict {track_id: {mfcc_coefficients, mfcc_bands, mfcc_times, mfcc_mean, mfcc_std}}
-    """
+
     processed_data_mfcc = {}
 
     window = es.Windowing(type='hann')
@@ -980,11 +920,7 @@ def extract_mfcc(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=
 
 #region Spectral Centroid Extraction
 def extract_spectral_centroid(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
-    """
-    Extract spectral centroid from preloaded mono audio.
-    Input: dict {track_id: mono audio (VectorReal)}
-    Output: dict {track_id: {centroid_values, times, centroid_mean, centroid_std}}
-    """
+
     centroid_processed_data = {}
 
     window = es.Windowing(type='hann')
@@ -1037,14 +973,9 @@ def extract_spectral_centroid(mono_loaded_audio, frame_size=2048, hop_size=1024,
 =====================================
 """
 #region Segment Count Extraction
-from scipy.signal import find_peaks
+
 def extract_segment_boundaries_and_novelty(eqloud_loaded_audio, frame_size=1024, hop_size=512, sample_rate=44100):
-    """
-    Returns per track:
-    - segment boundaries (seconds)
-    - onset envelope (novelty curve)
-    - audio duration (seconds)
-    """
+
     segment_data = {}
 
     window = es.Windowing(type='hann')
@@ -1087,15 +1018,7 @@ def extract_segment_boundaries_and_novelty(eqloud_loaded_audio, frame_size=1024,
 
 #region Segment Duration Extraction
 def extract_segment_durations_stats(segment_data, eqloud_loaded_audio):
-    """
-    Input:
-        segment_data: dict from extract_segment_boundaries_and_novelty
-    Returns:
-        dict per track:
-          - segment_durations (list of floats in seconds)
-          - mean_duration (float)
-          - std_duration (float)
-    """
+
     durations_stats = {}
     total_tracks_len = len(eqloud_loaded_audio)
     for idx, (track_id, data) in enumerate(segment_data.items(), start=1):
@@ -1122,16 +1045,8 @@ def extract_segment_durations_stats(segment_data, eqloud_loaded_audio):
 #endregion
 
 #region Novelty Curve Extraction
-def extract_novelty_stats(segment_data,eqloud_loaded_audio): #TODO: logika thelei mono
-    """
-    Input:
-      segment_data: dict from extract_segment_boundaries_and_novelty
-    Returns:
-      dict per track:
-        - onset_envelope (novelty curve) list of floats
-        - mean_onset (float)
-        - std_onset (float)
-    """
+def extract_novelty_stats(segment_data,eqloud_loaded_audio): #TODO: logika thelei eq
+
     novelty_stats = {}
     total_tracks_len = len(eqloud_loaded_audio)
     for idx, (track_id, data) in enumerate(segment_data.items(), start=1):
@@ -1156,18 +1071,7 @@ def extract_novelty_stats(segment_data,eqloud_loaded_audio): #TODO: logika thele
 """
 #region Log Attack Time Extraction
 def extract_log_attack_time(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
-    """
-    Extract Log Attack Time (LAT) per track using Essentia's LogAttackTime algorithm.
 
-    Parameters:
-        mono_loaded_audio (dict): Dictionary mapping track IDs to loaded audio arrays.
-        frame_size (int): Frame size in samples for analysis.
-        hop_size (int): Hop size in samples between frames.
-        sample_rate (int): Sampling rate of the audio.
-
-    Returns:
-        dict: Mapping track IDs to extracted Log Attack Time values per frame.
-    """
 
     lat_processed_data = {}
 
@@ -1213,18 +1117,7 @@ def extract_log_attack_time(mono_loaded_audio, frame_size=2048, hop_size=1024, s
 
 #region Vibrato Extraction
 def extract_vibrato(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
-    """
-    Extract Vibrato Presence per track using Essentia's VibratoPresence algorithm.
 
-    Parameters:
-        mono_loaded_audio (dict): Dictionary mapping track IDs to loaded audio arrays.
-        frame_size (int): Frame size in samples for analysis.
-        hop_size (int): Hop size in samples between frames.
-        sample_rate (int): Sampling rate of the audio.
-
-    Returns:
-        dict: Mapping track IDs to extracted Vibrato  values per frame.
-    """
 
     vibrato_data = {}
 
@@ -1277,12 +1170,7 @@ def extract_vibrato(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_ra
 """
 #region Spectral Flatness Extraction
 def extract_spectral_flatness(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
-    """
-    Compute average spectral flatness for each track.
 
-    Returns:
-        dict: Mapping track IDs to average spectral flatness.
-    """
     flatness_data = {}
 
     total_tracks = len(mono_loaded_audio)
@@ -1312,12 +1200,7 @@ def extract_spectral_flatness(mono_loaded_audio, frame_size=2048, hop_size=1024,
 
 #region Tristimulus Extraction
 def extract_tristimulus(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
-    """
-    Extract average Tristimulus coefficients (T1, T2, T3) per track.
 
-    Returns:
-        dict: Mapping track IDs to average T1, T2, T3.
-    """
     tristimulus_data = {}
 
     window = es.Windowing(type='hann')
@@ -1370,12 +1253,7 @@ def extract_tristimulus(mono_loaded_audio, frame_size=2048, hop_size=1024, sampl
 
 #region Odd/Even Harmonic Energy Ratio Extraction
 def extract_odd_even_harmonic_ratio(mono_loaded_audio, frame_size=2048, hop_size=1024):
-    """
-    Extract average Odd-to-Even Harmonic Energy Ratio per track.
 
-    Returns:
-        dict: Mapping track IDs to average Odd/Even ratio.
-    """
     harmonic_ratio_data = {}
 
     window = es.Windowing(type='hann')
@@ -1422,7 +1300,7 @@ def extract_odd_even_harmonic_ratio(mono_loaded_audio, frame_size=2048, hop_size
 
 #region Danceability Extraction
 def extract_danceability(track_id_to_path):
-  
+
     danceability_data = {}
 
     for idx, (track_id, filepath) in enumerate(track_id_to_path.items(), start=1):
@@ -1467,21 +1345,7 @@ def extract_dynamic_complexity(track_id_to_path):
 
 #region Data Merge
 def merge_audio_features(feature_dicts, metadata_df, on="track_id"):
-    """
-    Merges multiple feature dictionaries and joins with metadata dataframe.
 
-    Parameters:
-    - feature_dicts (list): List of dicts {track_id: features}, where features can be:
-        - dict of named features
-        - np.ndarray or list (1D or 2D)
-        - scalar (float, int)
-        - tuple of (np.ndarray, np.ndarray)
-    - metadata_df (pd.DataFrame): DataFrame containing metadata with 'track_id'.
-    - on (str): Column to merge on.
-
-    Returns:
-    - pd.DataFrame: Combined DataFrame with features and metadata.
-    """
     feature_dfs = []
 
     for idx, feature_dict in enumerate(feature_dicts):
@@ -1605,7 +1469,7 @@ def process(track_id_to_path,mono_loaded_audio, eqloud_loaded_audio):
     processed_data_dissonance = extract_dissonance_from_peaks(processed_spectral_peaks) #TODO: remove comment, takes too long to run
 
 
- 
+
 
     # Prepare pitch feature dataframe
     yin_pitch_features = []
@@ -1866,25 +1730,4 @@ batch_process_audio(track_id_to_path_another_name, page=10)
 
 #endregion
 
-
-
-
-
-# Create Features / Target Variables (Make flashcards)
-
-
-
-# ML Processing
-
-
-
-# Hyperparameter Tuning
-
-
-
-# Predictions and Evaluation
-
-
-
-# Plot
 

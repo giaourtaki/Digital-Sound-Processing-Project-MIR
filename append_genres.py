@@ -3,26 +3,47 @@ import pandas as pd
 import os
 from typing import Dict, List, Any, Optional
 
-class JSONReassembler:
+# Configure logging
 
+class JSONReassembler:
+    """
+    A class to reassemble shattered JSON data and prepare it for machine learning models.
+    
+    Input JSON structure: [{"variable_1": {"row_id": {"column"}}}]
+    Output structure: {"row_id": "row_1", "variable_1": "value_1", "variable_2": "value_2", ...}    """
     
     def __init__(self):
         self.reassembled_data = []
         self.all_variables = set()
         self.all_row_ids = set()
+    
     def load_json(self, json_file_path: str) -> List[Dict]:
         """Load JSON data from file."""
         try:
+            print(f"Loading JSON data from {json_file_path}...")
             with open(json_file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+            print(f"Successfully loaded {len(data)} items from JSON")
             return data
         except FileNotFoundError:
+            print(f"Error: File {json_file_path} not found")
             return []
         except json.JSONDecodeError as e:
+            print(f"Error: Invalid JSON format in {json_file_path}")
             return []
     
     def _flatten_nested_dict(self, nested_dict: Dict, parent_key: str = '', sep: str = '_') -> Dict:
-
+        """
+        Flatten a nested dictionary for ML-friendly format.
+        
+        Args:
+            nested_dict: Dictionary to flatten
+            parent_key: Parent key for nested structure
+            sep: Separator for flattened keys
+            
+        Returns:
+            Flattened dictionary
+        """
         items = []
         for key, value in nested_dict.items():
             new_key = f"{parent_key}{sep}{key}" if parent_key else key
@@ -30,8 +51,7 @@ class JSONReassembler:
             if isinstance(value, dict):
                 # Recursively flatten nested dictionaries
                 items.extend(self._flatten_nested_dict(value, new_key, sep=sep).items())
-            elif isinstance(value, list):
-                # Handle lists by creating separate columns for each element
+            elif isinstance(value, list):                # Handle lists by creating separate columns for each element
                 for i, item in enumerate(value):
                     if isinstance(item, dict):
                         items.extend(self._flatten_nested_dict(item, f"{new_key}_{i}", sep=sep).items())
@@ -43,12 +63,26 @@ class JSONReassembler:
         return dict(items)
     
     def reassemble_json_data(self, shattered_data: List[Dict], flatten_nested: bool = True) -> List[Dict]:
-
+        """
+        Reassemble shattered JSON data into a structure suitable for ML models.
+        
+        Args:
+            shattered_data: List of dictionaries with structure [{"variable_1": {"row_id": {"column"}}}]
+            flatten_nested: Whether to flatten nested structures for ML compatibility
+        
+        Returns:
+            List of dictionaries with structure [{"row_id": "row_1", "variable_1": "value_1", ...}]
+        """
+        print("Starting data reassembly...")
         # Dictionary to store reassembled data: {row_id: {variable: value}}
         data_dict = {}
         
         # Process each item in the shattered data
-        for item in shattered_data:
+        print(f"Processing {len(shattered_data)} data items...")
+        for i, item in enumerate(shattered_data):
+            if i % 10 == 0:  # Progress logging every 10 items
+                print(f"Processing item {i+1}/{len(shattered_data)}")
+            
             for variable_name, row_data in item.items():
                 self.all_variables.add(variable_name)
                 
@@ -76,32 +110,30 @@ class JSONReassembler:
                                 value = str(column_data)
                             data_dict[row_id][variable_name] = value
                     elif isinstance(column_data, list):
-                        if flatten_nested:
-                            # Handle lists by creating separate columns
-                            for i, item in enumerate(column_data):
-                                list_key = f"{variable_name}_{i}"
-                                if isinstance(item, dict):
-                                    flattened = self._flatten_nested_dict(item)
-                                    for flat_key, flat_value in flattened.items():
-                                        full_key = f"{list_key}_{flat_key}"
-                                        data_dict[row_id][full_key] = flat_value
-                                        self.all_variables.add(full_key)
-                                else:
-                                    data_dict[row_id][list_key] = item
-                                    self.all_variables.add(list_key)
-                        else:
-                            # Convert list to string representation
-                            data_dict[row_id][variable_name] = str(column_data)
+                        # Keep arrays as single column - convert to string representation
+                        data_dict[row_id][variable_name] = str(column_data)
                     else:
                         # Direct value
                         data_dict[row_id][variable_name] = column_data
+        
         # Convert to list of dictionaries
         self.reassembled_data = list(data_dict.values())
+        print(f"Data reassembly completed. Total tracks: {len(self.reassembled_data)}")
+        print(f"Total variables: {len(self.all_variables)}")
         
         return self.reassembled_data
     
     def save_to_csv(self, output_csv_path: str, data: Optional[List[Dict]] = None) -> bool:
-
+        """
+        Save reassembled data to CSV file.
+        
+        Args:
+            output_csv_path: Path to save the CSV file
+            data: Data to save (uses self.reassembled_data if None)
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
         if data is None:
             data = self.reassembled_data
         if not data:
@@ -125,32 +157,86 @@ class JSONReassembler:
             pd.DataFrame: Merged dataframe
         """
         try:
+            print(f"Loading existing CSV from {csv_file_path}...")
             # Load existing CSV
             existing_df = pd.read_csv(csv_file_path)
+            print(f"Loaded existing CSV with {len(existing_df)} rows and {len(existing_df.columns)} columns")
+            print(f"Existing CSV columns: {list(existing_df.columns)}")
             
             # Convert reassembled data to DataFrame
             if not self.reassembled_data:
+                print("No reassembled data available, returning existing CSV")
                 return existing_df
             
+            print(f"Converting {len(self.reassembled_data)} reassembled records to DataFrame...")
             new_df = pd.DataFrame(self.reassembled_data)
+            print(f"New DataFrame has {len(new_df)} rows and {len(new_df.columns)} columns")
+            print(f"New DataFrame columns: {list(new_df.columns)}")
             
-            # Merge on row_id
-            if 'row_id' in existing_df.columns:
-                merged_df = pd.merge(existing_df, new_df, on='row_id', how='outer', suffixes=('_existing', '_new'))
+            # Create a proper identifier for merging
+            # First, check if there's a track_id or similar column in existing CSV
+            merge_column = None
+            if 'track_id' in existing_df.columns:
+                merge_column = 'track_id'
+                # Map row_id to track_id format if needed
+                if 'row_id' in new_df.columns:
+                    new_df['track_id'] = new_df['row_id']
+            elif 'id' in existing_df.columns:
+                merge_column = 'id'
+                if 'row_id' in new_df.columns:
+                    new_df['id'] = new_df['row_id']
+            elif 'row_id' in existing_df.columns:
+                merge_column = 'row_id'
             else:
-                # If no row_id column, assume index matches
-                existing_df['row_id'] = existing_df.index
-                merged_df = pd.merge(existing_df, new_df, on='row_id', how='outer', suffixes=('_existing', '_new'))
+                # Create a merge key based on index
+                existing_df['merge_key'] = existing_df.index.astype(str)
+                new_df['merge_key'] = new_df['row_id'] if 'row_id' in new_df.columns else new_df.index.astype(str)
+                merge_column = 'merge_key'
             
+            print(f"Using '{merge_column}' as merge column")
+            
+            # Fix data type mismatch before merging
+            if merge_column in existing_df.columns and merge_column in new_df.columns:
+                print(f"Existing column type: {existing_df[merge_column].dtype}")
+                print(f"New column type: {new_df[merge_column].dtype}")
+                
+                # Convert both columns to string to avoid type mismatch
+                existing_df[merge_column] = existing_df[merge_column].astype(str)
+                new_df[merge_column] = new_df[merge_column].astype(str)
+                
+                print(f"After conversion - Existing: {existing_df[merge_column].dtype}, New: {new_df[merge_column].dtype}")
+                
+                # Merge dataframes - use 'left' join to keep all original CSV data
+                merged_df = pd.merge(existing_df, new_df, on=merge_column, how='left', suffixes=('', '_new'))
+                print(f"Merged successfully using column '{merge_column}'")
+            else:
+                print("Could not find suitable merge column, concatenating side by side")
+                # If no suitable merge column, just concatenate
+                merged_df = pd.concat([existing_df, new_df], axis=1)
+            
+            print(f"Merged DataFrame has {len(merged_df)} rows and {len(merged_df.columns)} columns")
             return merged_df
             
         except FileNotFoundError:
+            print(f"CSV file {csv_file_path} not found")
             return pd.DataFrame(self.reassembled_data) if self.reassembled_data else pd.DataFrame()
         except Exception as e:
+            print(f"Error during CSV merge: {str(e)}")
             return pd.DataFrame(self.reassembled_data) if self.reassembled_data else pd.DataFrame()
     def prepare_for_sklearn(self, df: pd.DataFrame, target_column: Optional[str] = None, 
                         handle_missing: str = 'drop', encode_categoricals: bool = True) -> tuple:
-
+        """
+        Prepare data for scikit-learn models with comprehensive preprocessing.
+        
+        Args:mer
+            df: DataFrame to prepare
+            target_column: Name of the target column (if any)
+            handle_missing: How to handle missing values ('drop', 'mean', 'median', 'mode', 'zero')
+            encode_categoricals: Whether to encode categorical variables
+        
+        Returns:
+            tuple: (features_df, target_series, preprocessing_info)
+        """
         from sklearn.preprocessing import LabelEncoder, StandardScaler
         from sklearn.impute import SimpleImputer
         
@@ -219,7 +305,16 @@ class JSONReassembler:
         return df_copy, target, preprocessing_info
     
     def apply_preprocessing(self, df: pd.DataFrame, preprocessing_info: Dict) -> pd.DataFrame:
-
+        """
+        Apply previously fitted preprocessing to new data.
+        
+        Args:
+            df: New data to preprocess
+            preprocessing_info: Preprocessing information from prepare_for_sklearn
+            
+        Returns:
+            Preprocessed DataFrame
+        """
         df_copy = df.copy()
         
         # Remove row_id if present
@@ -293,7 +388,7 @@ def main():
     else:
         if os.path.exists(json_file):
             # Load and process real JSON file
-            shattered_data = reassembler.load_json(json_file)
+            shattered_data = reassembler.load_json(json_file)            
             if shattered_data:
                 reassembled = reassembler.reassemble_json_data(shattered_data)
                 reassembler.display_sample(reassembled)
@@ -301,30 +396,49 @@ def main():
             print(f"File {json_file} does not exist.")
             return
     
-    # Ask about CSV operations
+    # Process CSV operations - only use merge feature
+    print("Starting CSV operations...")
     csv_operation = 2
-    if csv_operation == "1":
-        output_path = input("Enter output CSV path (default: output.csv): ").strip() or "output.csv"
-        reassembler.save_to_csv(output_path)
+    
+    if csv_operation == 1:
+        print("Saving reassembled data to CSV...")
+        output_path = "output.csv"
+        success = reassembler.save_to_csv(output_path)
+        if success:
+            print(f"Data saved to {output_path}")
+        else:            print("Failed to save data to CSV")
         
-    elif csv_operation == "2":
-        existing_csv = 'raw_tracks_modified.csv'
+    elif csv_operation == 2:
+        print("Attempting to merge with existing CSV...")
+        existing_csv = 'modified_raw_tracks_genres.csv'
+        
         if existing_csv and os.path.exists(existing_csv):
+            print(f"Found existing CSV: {existing_csv}")
             merged_df = reassembler.load_and_merge_csv(existing_csv)
             
-            output_path = "merged_output.csv"
+            # Save the merged data without filtering
+            output_path = "merged_output_of_extracted_features.csv"
             merged_df.to_csv(output_path, index=False)
             print(f"Merged data saved to {output_path}")
+            print(f"Final CSV contains {len(merged_df)} rows and {len(merged_df.columns)} columns")
             
-            # Prepare for sklearn
-            features, target = reassembler.prepare_for_sklearn(merged_df)
-            print(f"\nData prepared for scikit-learn:")
-            print(f"Features shape: {features.shape}")
-            print(f"Feature columns: {list(features.columns)}")
-            if target is not None:
-                print(f"Target shape: {target.shape}")
+            # Show sample of first few columns to verify
+            print("\nSample of merged data (first 3 rows, first 10 columns):")
+            print(merged_df.head(3).iloc[:, :10])
+            
         else:
-            print("CSV file not found or not specified.")
+            print(f"CSV file {existing_csv} not found. Creating new CSV with reassembled data...")
+            output_path = "reassembled_data.csv"
+            success = reassembler.save_to_csv(output_path)
+            if success:
+                print(f"Reassembled data saved to {output_path}")                # Check the saved file
+                import pandas as pd
+                df = pd.read_csv(output_path)
+                print(f"Saved CSV contains {len(df)} rows and {len(df.columns)} columns")
+            else:
+                print("Failed to save reassembled data to CSV")
+    
+    print("Process completed successfully!")
 
 
 if __name__ == "__main__":

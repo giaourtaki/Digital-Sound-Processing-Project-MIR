@@ -172,7 +172,7 @@ genre_label_map = {
 
 # Extract label directly from the streamed data
 def label_func_from_streamed_record(record_entry):
-    record_id = record_entry.get('id', 'unknown')
+    #record_id = record_entry.get('id', 'unknown')
     
     # Debug: Print the entire data structure for problematic records
     genre_list = record_entry['data'].get('genre')
@@ -224,12 +224,14 @@ def label_func_from_streamed_record(record_entry):
     
     return label
 
+FEATURE_LENGTH = None  # Will store the expected feature vector length
+
 def train_scikit_learn_incrementally(data_stream_generator):
+    global FEATURE_LENGTH
     model = SGDClassifier(loss='log_loss', random_state=42, warm_start=True)
     scaler = StandardScaler()
     first_batch_processed = False
     all_possible_classes = np.array([0, 1, 2, 3])
-    expected_length = None
 
     print("Starting incremental training...")
     batch_count = 0
@@ -245,7 +247,6 @@ def train_scikit_learn_incrementally(data_stream_generator):
         y_batch_labels = []
 
         for record_entry in batch_of_raw_records:
-            # Ensure essential keys exist
             if 'data' not in record_entry or not isinstance(record_entry['data'], dict):
                 print(f"Record {record_entry.get('id')} has no 'data' field.")
                 continue
@@ -268,14 +269,17 @@ def train_scikit_learn_incrementally(data_stream_generator):
             skipped_batches += 1
             continue
 
+        # Set the expected feature length from the first valid feature vector
+        if FEATURE_LENGTH is None:
+            FEATURE_LENGTH = len(X_batch_features[0])
+            print(f"Feature vector length set to: {FEATURE_LENGTH}")
+
         # Ensure all feature vectors are the same length
-        if expected_length is None:
-            expected_length = len(X_batch_features[0])
         for i, features in enumerate(X_batch_features):
-            if len(features) < expected_length:
-                X_batch_features[i] = np.pad(features, (0, expected_length - len(features)), 'constant')
-            elif len(features) > expected_length:
-                X_batch_features[i] = features[:expected_length]
+            if len(features) < FEATURE_LENGTH:
+                X_batch_features[i] = np.pad(features, (0, FEATURE_LENGTH - len(features)), 'constant')
+            elif len(features) > FEATURE_LENGTH:
+                X_batch_features[i] = features[:FEATURE_LENGTH]
 
         X_batch = np.array(X_batch_features, dtype=float)
         y_batch = np.array(y_batch_labels, dtype=int)
@@ -301,10 +305,10 @@ def train_scikit_learn_incrementally(data_stream_generator):
 
     return model, scaler
 
-# Usage: Updated to use CSV streaming
+
 train_generator = stream_raw_csv_data(
     csv_file_path='merged_output_of_extracted_features.csv',  
-    batch_size=128, #Test batch size, change teste_generator too
+    batch_size=128, 
     genre_column='genre',  
     id_column='track_id'   
 )
@@ -315,8 +319,14 @@ model, scaler = train_scikit_learn_incrementally(train_generator)
 
 #region Evaluate Model
 def evaluate_incremental_model(model, scaler, test_data_generator, target_labels_func):
+    global FEATURE_LENGTH
+    if FEATURE_LENGTH is None:
+        print("Error: Feature length not set. Model must be trained first.")
+        return None
+
     all_preds = []
     all_true = []
+    print(f"Evaluating with feature length: {FEATURE_LENGTH}")
 
     for batch in test_data_generator:
         X_batch = []
@@ -330,20 +340,29 @@ def evaluate_incremental_model(model, scaler, test_data_generator, target_labels
             label = target_labels_func(record_entry)
             if label is None or label == -1:
                 continue
-                
+
+            # Ensure feature vector matches expected length
+            if len(features) < FEATURE_LENGTH:
+                features = np.pad(features, (0, FEATURE_LENGTH - len(features)), 'constant')
+            elif len(features) > FEATURE_LENGTH:
+                features = features[:FEATURE_LENGTH]
+
             X_batch.append(features)
             y_batch.append(label)
 
         if not X_batch:
             continue
 
-        X_batch = np.array(X_batch, dtype=float)
-        y_batch = np.array(y_batch, dtype=int)
-        X_batch_scaled = scaler.transform(X_batch)
-
-        preds = model.predict(X_batch_scaled)
-        all_preds.extend(preds)
-        all_true.extend(y_batch)
+        try:
+            X_batch = np.array(X_batch, dtype=float)
+            y_batch = np.array(y_batch, dtype=int)
+            X_batch_scaled = scaler.transform(X_batch)
+            preds = model.predict(X_batch_scaled)
+            all_preds.extend(preds)
+            all_true.extend(y_batch)
+        except Exception as e:
+            print(f"Error processing batch: {str(e)}")
+            continue
 
     if not all_true:
         print("No valid predictions made during evaluation.")
@@ -356,7 +375,7 @@ def evaluate_incremental_model(model, scaler, test_data_generator, target_labels
     print("\nEvaluation Results:")
     print("Accuracy:", accuracy_score(y_true, y_pred))
     print("Confusion Matrix:\n", confusion_matrix(y_true, y_pred))
-    print("Classification Report:\n", classification_report(y_true, y_pred, zero_division=0)) #TODO:change zero_division to 1 to debug
+    print("Classification Report:\n", classification_report(y_true, y_pred, zero_division=0))
 
     return {
         "accuracy": accuracy_score(y_true, y_pred),

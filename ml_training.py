@@ -13,14 +13,18 @@ import pandas as pd
 import numpy as np
 import os
 import csv
+import sys
 
 #endregion
 
+# for fixing CSV field size limit issue
+csv.field_size_limit(sys.maxsize)
+
 #region stream data from the CSV file in batches
-def stream_raw_csv_data(csv_file_path, batch_size=1000, genre_column='genre', id_column='id'):
+def stream_raw_csv_data(csv_file_path, batch_size=1000, genre_column='genre', id_column='track_id'):
 
     batch_records = []
-    columns_printed = False
+    #columns_printed = False
     
     try:
         with open(csv_file_path, 'r', newline='', encoding='utf-8') as file:
@@ -28,18 +32,19 @@ def stream_raw_csv_data(csv_file_path, batch_size=1000, genre_column='genre', id
             reader = csv.DictReader(file)
             
             # Print column names for testing
+            """""
             if not columns_printed:
                 print("CSV Columns found:")
                 for i, col in enumerate(reader.fieldnames):
                     print(f"  {i}: {col}")
                 print()
                 columns_printed = True
-            
+            """""
             for row_dict in reader:
                 # Convert the row to our expected format
                 record_id = row_dict.get(id_column, 'unknown')
                 
-                # Create data dictionary excluding genre and id columns
+                # Create data dictionary excluding genre and id columns #TODO: investigate
                 data_dict = {}
                 for key, value in row_dict.items():
                     if key not in [genre_column, id_column]:
@@ -83,7 +88,7 @@ def stream_raw_csv_data(csv_file_path, batch_size=1000, genre_column='genre', id
 #endregion
 
 if __name__ == "__main__":
-    your_csv_file_path = "modified_raw_tracks_genres.csv"  
+    your_csv_file_path = "merged_output_of_extracted_features.csv"  
 
     print("Simulating raw data streaming from the CSV file:")
 
@@ -98,17 +103,17 @@ if __name__ == "__main__":
         print(f"\n--- Raw Batch {total_batches_processed} ---")
         for record_entry in batch_data:
             print(f"  Record ID: {record_entry['id']}")
-            if 'data' in record_entry:  
-                if isinstance(record_entry['data'], dict):
-                    print(f"  Feature Set: {record_entry['feature_set_name']}")
-                    print(f"  Available features: {list(record_entry['data'].keys())}")
-                else:
-                    print(f"Raw Data: {record_entry}")
-            else:
-                print(f"  No data field in record")
+            #if 'data' in record_entry:  
+                #if isinstance(record_entry['data'], dict):
+                    #print(f"  Feature Set: {record_entry['feature_set_name']}")
+                    #print(f"  Available features: {list(record_entry['data'].keys())}")
+                #else:
+                    #print(f"Raw Data: {record_entry}")
+            #else:
+                #print(f"  No data field in record")
             total_records_processed += 1
         # For very large files, uncomment this to limit output
-        #if total_batches_processed >= 2: # Print only first 2 batches as an example TODO:comment after to run the whole dataset
+        #if total_batches_processed >= 1: # Print only first 1 batch as an example TODO:comment after to run the whole dataset
             #break
 
     if total_records_processed > 0:
@@ -171,10 +176,8 @@ def label_func_from_streamed_record(record_entry):
     
     # Debug: Print the entire data structure for problematic records
     genre_list = record_entry['data'].get('genre')
-    
-    print(f"DEBUG - Record {record_id}:")
-    print(f"  Raw genre value: {genre_list}")
-    print(f"  Type of genre: {type(genre_list)}")
+    #Test Prints
+    ###print(f"  Type of genre: {type(genre_list)}")
     
     if not genre_list:
         print(f"  → Genre list is empty or None")
@@ -215,8 +218,9 @@ def label_func_from_streamed_record(record_entry):
         return None
 
     label = genre_label_map.get(genre_title)
-    print(f"  → Genre: '{genre_title}' → Label: {label}")
-    print(f"  → Available genre mappings: {list(genre_label_map.keys())}")
+    #Test Prints
+    #print(f"  → Genre: '{genre_title}' → Label: {label}")
+    #print(f"  → Available genre mappings: {list(genre_label_map.keys())}")
     
     return label
 
@@ -225,6 +229,7 @@ def train_scikit_learn_incrementally(data_stream_generator):
     scaler = StandardScaler()
     first_batch_processed = False
     all_possible_classes = np.array([0, 1, 2, 3])
+    expected_length = None
 
     print("Starting incremental training...")
     batch_count = 0
@@ -263,6 +268,15 @@ def train_scikit_learn_incrementally(data_stream_generator):
             skipped_batches += 1
             continue
 
+        # Ensure all feature vectors are the same length
+        if expected_length is None:
+            expected_length = len(X_batch_features[0])
+        for i, features in enumerate(X_batch_features):
+            if len(features) < expected_length:
+                X_batch_features[i] = np.pad(features, (0, expected_length - len(features)), 'constant')
+            elif len(features) > expected_length:
+                X_batch_features[i] = features[:expected_length]
+
         X_batch = np.array(X_batch_features, dtype=float)
         y_batch = np.array(y_batch_labels, dtype=int)
 
@@ -289,10 +303,10 @@ def train_scikit_learn_incrementally(data_stream_generator):
 
 # Usage: Updated to use CSV streaming
 train_generator = stream_raw_csv_data(
-    csv_file_path='modified_raw_tracks_genres.csv',  # Changed from JSON to CSV
-    batch_size=128,
-    genre_column='genre',  # Updated to match actual column name
-    id_column='id'  # Specify the ID column name
+    csv_file_path='merged_output_of_extracted_features.csv',  
+    batch_size=128, #Test batch size, change teste_generator too
+    genre_column='genre',  
+    id_column='track_id'   
 )
 
 model, scaler = train_scikit_learn_incrementally(train_generator)
@@ -342,7 +356,7 @@ def evaluate_incremental_model(model, scaler, test_data_generator, target_labels
     print("\nEvaluation Results:")
     print("Accuracy:", accuracy_score(y_true, y_pred))
     print("Confusion Matrix:\n", confusion_matrix(y_true, y_pred))
-    print("Classification Report:\n", classification_report(y_true, y_pred))
+    print("Classification Report:\n", classification_report(y_true, y_pred, zero_division=0)) #TODO:change zero_division to 1 to debug
 
     return {
         "accuracy": accuracy_score(y_true, y_pred),
@@ -359,9 +373,10 @@ def genre_label_func(record_entry):
     # Debug: Print the entire data structure for problematic records
     genres = record_entry.get('data', {}).get('genre', [])
     
-    print(f"DEBUG - Record {record_id} (evaluation):")
-    print(f"  Raw genre value: {genres}")
-    print(f"  Type of genre: {type(genres)}")
+    #Test Prints
+    #print(f"DEBUG - Record {record_id} (evaluation):")
+    #print(f"  Raw genre value: {genres}")
+    #print(f"  Type of genre: {type(genres)}")
     
     if not genres:
         print(f"  → No genres found")
@@ -369,11 +384,13 @@ def genre_label_func(record_entry):
         
     if isinstance(genres, list) and len(genres) > 0:
         first_item = genres[0]
-        print(f"  → First item: {first_item} (type: {type(first_item)})")
+        #Test Print
+        #print(f"  → First item: {first_item} (type: {type(first_item)})")
         
         if isinstance(first_item, dict):
             genre_title = first_item.get('genre_title')
-            print(f"  → Extracted genre_title: {genre_title}")
+        #Test Print    
+        #print(f"  → Extracted genre_title: {genre_title}")
         else:
             genre_title = first_item
             print(f"  → Using first item as genre: {genre_title}")
@@ -385,17 +402,24 @@ def genre_label_func(record_entry):
         return -1
         
     label = GENRE_TO_LABEL.get(genre_title, -1)
-    print(f"  → Genre: '{genre_title}' → Label: {label}")
-    print(f"  → Available genre mappings: {list(GENRE_TO_LABEL.keys())}")
+    #Test Prints
+    #print(f"  → Genre: '{genre_title}' → Label: {label}")
+    #print(f"  → Available genre mappings: {list(GENRE_TO_LABEL.keys())}")
     
     return label
 
 # Recreate test generator for CSV
+"""
+def preprocess_test_data(df):
+    #drop the genre column and id column from the CSV file
+    df.drop(columns=['album_id', 'album_title'])
+    return df
+"""
 test_generator = stream_raw_csv_data(
-    csv_file_path='modified_raw_tracks_genres.csv',  # Changed from JSON to CSV
+    csv_file_path='merged_output_of_extracted_features.csv',  
     batch_size=128,
-    genre_column='genre',  # Updated to match actual column name
-    id_column='id'  # Specify the ID column name
+    genre_column='genre',  
+    id_column='track_id'  
 )
 
 # Call evaluation method with correct label function

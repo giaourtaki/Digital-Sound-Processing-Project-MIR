@@ -354,7 +354,10 @@ def extract_mnn_stats(processed_data_pitch_melodia):
                 'mnn_kurtosis': kurtosis(mnn_int),
                 'mnn_rms': np.sqrt(np.mean(np.square(mnn_int))),
                 'mnn_delta': np.mean(np.diff(mnn_int)) if len(mnn_int) > 1 else 0
+                
             }
+            # Test print 
+            #print(f"[MNN Stats] Track {track_id}: {processed_data_mnn[track_id]}") 
         else:
             # No valid pitches detected
             processed_data_mnn[track_id] = {
@@ -366,6 +369,31 @@ def extract_mnn_stats(processed_data_pitch_melodia):
                 'mnn_rms': np.nan,
                 'mnn_delta': np.nan
             }
+
+        cursor = connection.cursor()
+        sql = """INSERT INTO processed_sound_data (
+                    track_id, mnn_mean, mnn_median, mnn_std, mnn_skewness, mnn_kurtosis, mnn_rms, mnn_delta) values (?, ?, ?, ?, ?, ?, ?, ?) 
+                    ON CONFLICT(track_id) DO UPDATE SET 
+                    mnn_mean = excluded.mnn_mean,
+                    mnn_median = excluded.mnn_median,
+                    mnn_std = excluded.mnn_std,
+                    mnn_skewness = excluded.mnn_skewness, 
+                    mnn_kurtosis = excluded.mnn_kurtosis , 
+                    mnn_rms = excluded.mnn_rms, 
+                    mnn_delta = excluded.mnn_delta"""
+        # Get the correct values from the processed_data_pitch_melodia dict for this track
+        vals = processed_data_mnn[track_id]
+        cursor.execute(sql, (
+            track_id,
+            float(vals['mnn_mean']),
+            float(vals['mnn_median']),
+            float(vals['mnn_std']),
+            float(vals['mnn_skewness']),
+            float(vals['mnn_kurtosis']),
+            float(vals['mnn_rms']),
+            float(vals['mnn_delta'])
+        ))
+        connection.commit()
 
     return processed_data_mnn
 
@@ -429,9 +457,32 @@ def extract_inharmonicity(mono_loaded_audio, frame_size=2048, hop_size=1024, sam
             'inharmonicity_kurtosis': kurtosis(inharmonicity_values) if inharmonicity_values else np.nan,
             'inharmonicity_rms': np.sqrt(np.mean(np.square(inharmonicity_values))) if inharmonicity_values else np.nan,
             'inharmonicity_delta': np.mean(np.diff(inharmonicity_values)) if len(inharmonicity_values) > 1 else 0
-
+        
         }
-
+        cursor = connection.cursor()
+        sql = """INSERT INTO processed_sound_data (
+                    track_id, inharmonicity_mean, inharmonicity_median, inharmonicity_std, inharmonicity_skewness, inharmonicity_kurtosis, inharmonicity_rms, inharmonicity_delta) values (?, ?, ?, ?, ?, ?, ?, ?) 
+                    ON CONFLICT(track_id) DO UPDATE SET 
+                    inharmonicity_mean = excluded.inharmonicity_mean,
+                    inharmonicity_median = excluded.inharmonicity_median,
+                    inharmonicity_std = excluded.inharmonicity_std,
+                    inharmonicity_skewness = excluded.inharmonicity_skewness, 
+                    inharmonicity_kurtosis = excluded.inharmonicity_kurtosis , 
+                    inharmonicity_rms = excluded.inharmonicity_rms, 
+                    inharmonicity_delta = excluded.inharmonicity_delta"""
+        # Get the correct values from the processed_data_pitch_melodia dict for this track
+        vals = processed_data_inharmonicity[track_id]
+        cursor.execute(sql, (
+            track_id,
+            float(vals['inharmonicity_mean']),
+            float(vals['inharmonicity_median']),
+            float(vals['inharmonicity_std']),
+            float(vals['inharmonicity_skewness']),
+            float(vals['inharmonicity_kurtosis']),
+            float(vals['inharmonicity_rms']),
+            float(vals['inharmonicity_delta'])
+        ))
+        connection.commit()
     return processed_data_inharmonicity
 
 # Test print
@@ -493,6 +544,29 @@ def extract_chromagram(mono_loaded_audio,
             'chroma_rms': chroma_rms.tolist(),
             'chroma_delta': chroma_delta.tolist()
         }
+        cursor = connection.cursor()
+        sql = """INSERT INTO processed_sound_data (
+                    track_id, chroma_mean, chroma_median, chroma_std, chroma_skewness, chroma_kurtosis, chroma_rms, chroma_delta) values (?, ?, ?, ?, ?, ?, ?, ?) 
+                    ON CONFLICT(track_id) DO UPDATE SET 
+                    chroma_mean = excluded.chroma_mean,
+                    chroma_median = excluded.chroma_median,
+                    chroma_std = excluded.chroma_std,
+                    chroma_skewness = excluded.chroma_skewness, 
+                    chroma_kurtosis = excluded.chroma_kurtosis , 
+                    chroma_rms = excluded.chroma_rms, 
+                    chroma_delta = excluded.chroma_delta"""
+        # Store only the mean of each chroma statistics array as a float
+        cursor.execute(sql, (
+            track_id,
+            float(np.mean(chroma_mean)),
+            float(np.mean(chroma_median)),
+            float(np.mean(chroma_std)),
+            float(np.mean(chroma_skewness)),
+            float(np.mean(chroma_kurtosis)),
+            float(np.mean(chroma_rms)),
+            float(np.mean(chroma_delta))
+        ))
+        connection.commit()
 
     return processed_data_chromogram
 
@@ -523,8 +597,8 @@ def extract_hpcp(mono_loaded_audio,
                         referenceFrequency=440.0)
 
     total = len(mono_loaded_audio)
-    for idx, (tid, audio) in enumerate(mono_loaded_audio.items(), start=1):
-        print(f"[{idx}/{total}] [HPCP] Processing track {tid}")
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        print(f"[{idx}/{total}] [HPCP] Processing track {track_id}")
         frames = []
         for i in range(0, len(audio)-frame_size, hop_size):
             frame = window(audio[i:i+frame_size])
@@ -553,7 +627,7 @@ def extract_hpcp(mono_loaded_audio,
             hpcp_rms = np.zeros(bins_per_octave)
             hpcp_delta = np.zeros(bins_per_octave)
 
-        processed_data_hpcp[tid] = {
+        processed_data_hpcp[track_id] = {
             'hpcp_values': hpcp_array.tolist(),
             'hpcp_mean': hpcp_mean.tolist(),
             'hpcp_median': hpcp_median.tolist(),
@@ -563,6 +637,30 @@ def extract_hpcp(mono_loaded_audio,
             'hpcp_rms': hpcp_rms.tolist(),
             'hpcp_delta': hpcp_delta.tolist()
         }
+        cursor = connection.cursor()
+        sql = """INSERT INTO processed_sound_data (
+                    track_id, hpcp_mean, hpcp_median, hpcp_std, hpcp_skewness, hpcp_kurtosis, hpcp_rms, hpcp_delta) values (?, ?, ?, ?, ?, ?, ?, ?) 
+                    ON CONFLICT(track_id) DO UPDATE SET 
+                    hpcp_mean = excluded.hpcp_mean,
+                    hpcp_median = excluded.hpcp_median,
+                    hpcp_std = excluded.hpcp_std,
+                    hpcp_skewness = excluded.hpcp_skewness, 
+                    hpcp_kurtosis = excluded.hpcp_kurtosis , 
+                    hpcp_rms = excluded.hpcp_rms, 
+                    hpcp_delta = excluded.hpcp_delta"""
+        # Get the correct values from the processed_data_pitch_melodia dict for this track
+        #vals = processed_data_hpcp[track_id]
+        cursor.execute(sql, (
+            track_id,
+            float(np.mean(hpcp_mean)),
+            float(np.mean(hpcp_median)),
+            float(np.mean(hpcp_std)),
+            float(np.mean(hpcp_skewness)),
+            float(np.mean(hpcp_kurtosis)),
+            float(np.mean(hpcp_rms)),
+            float(np.mean(hpcp_delta))
+        ))
+        connection.commit()
 
     return processed_data_hpcp
 
@@ -863,7 +961,7 @@ def extract_beat_histogram(mono_loaded_audio, frame_size=1024, hop_size=512, sam
 =====================================
 """
 #region Loudness Extraction
-def extract_loudness_mean(mono_loaded_audio, sample_rate=44100, frame_size=2048, hop_size=1024):
+def extract_loudness(mono_loaded_audio, sample_rate=44100, frame_size=2048, hop_size=1024):
 
     loudness_algo = es.Loudness()
 
@@ -903,6 +1001,30 @@ def extract_loudness_mean(mono_loaded_audio, sample_rate=44100, frame_size=2048,
                     'loudness_rms': 0.0,
                     'loudness_delta': 0.0
                 }
+            cursor = connection.cursor()
+            sql = """INSERT INTO processed_sound_data (
+                        track_id, loudness_mean, loudness_median, loudness_std, loudness_skewness, loudness_kurtosis, loudness_rms, loudness_delta) values (?, ?, ?, ?, ?, ?, ?, ?) 
+                        ON CONFLICT(track_id) DO UPDATE SET 
+                        loudness_mean = excluded.loudness_mean,
+                        loudness_median = excluded.loudness_median,
+                        loudness_std = excluded.loudness_std,
+                        loudness_skewness = excluded.loudness_skewness, 
+                        loudness_kurtosis = excluded.loudness_kurtosis , 
+                        loudness_rms = excluded.loudness_rms, 
+                        loudness_delta = excluded.loudness_delta"""
+            # Get the correct values from the processed_data_pitch_melodia dict for this track
+            vals = processed_loudness[track_id]
+            cursor.execute(sql, (
+            track_id,
+            float(vals['loudness_mean']),
+            float(vals['loudness_median']),
+            float(vals['loudness_std']),
+            float(vals['loudness_skewness']),
+            float(vals['loudness_kurtosis']),
+            float(vals['loudness_rms']),
+            float(vals['loudness_delta'])
+        ))
+            connection.commit()
 
         except Exception as e:
             print(f"Error processing loudness for track {track_id}: {e}")
@@ -957,6 +1079,30 @@ def extract_dynamic_range(mono_loaded_audio, frame_size=2048, hop_size=1024):
                     'dynamic_delta': 0.0,
                     'dynamic_range': 0.0
                 }
+            cursor = connection.cursor()
+            sql = """INSERT INTO processed_sound_data (
+                        track_id, dynamic_mean, dynamic_median, dynamic_std, dynamic_skewness, dynamic_kurtosis, dynamic_rms, dynamic_delta) values (?, ?, ?, ?, ?, ?, ?, ?) 
+                        ON CONFLICT(track_id) DO UPDATE SET 
+                        dynamic_mean = excluded.dynamic_mean,
+                        dynamic_median = excluded.dynamic_median,
+                        dynamic_std = excluded.dynamic_std,
+                        dynamic_skewness = excluded.dynamic_skewness, 
+                        dynamic_kurtosis = excluded.dynamic_kurtosis , 
+                        dynamic_rms = excluded.dynamic_rms, 
+                        dynamic_delta = excluded.dynamic_delta"""
+            # Get the correct values from the processed_data_pitch_melodia dict for this track
+            vals = processed_dynamic_range[track_id]
+            cursor.execute(sql, (
+            track_id, 
+            float(vals['dynamic_mean']),
+            float(vals['dynamic_median']),
+            float(vals['dynamic_std']),
+            float(vals['dynamic_skewness']),
+            float(vals['dynamic_kurtosis']),
+            float(vals['dynamic_rms']),
+            float(vals['dynamic_delta'])
+            ))
+            connection.commit()
 
         except Exception as e:
             print(f"Error processing dynamic range for track {track_id}: {e}")
@@ -1009,6 +1155,30 @@ def extract_rms_energy_std(mono_loaded_audio, frame_size=2048, hop_size=1024):
                     'rms_rms': 0.0,
                     'rms_delta': 0.0
                 }
+            cursor = connection.cursor()
+            sql = """INSERT INTO processed_sound_data (
+                        track_id, rms_mean, rms_median, rms_std, rms_skewness, rms_kurtosis, rms_rms, rms_delta) values (?, ?, ?, ?, ?, ?, ?, ?) 
+                        ON CONFLICT(track_id) DO UPDATE SET 
+                        rms_mean = excluded.rms_mean,
+                        rms_median = excluded.rms_median,
+                        rms_std = excluded.rms_std,
+                        rms_skewness = excluded.rms_skewness, 
+                        rms_kurtosis = excluded.rms_kurtosis , 
+                        rms_rms = excluded.rms_rms, 
+                        rms_delta = excluded.rms_delta"""
+            # Get the correct values from the processed_data_pitch_melodia dict for this track
+            vals = processed_rms_std[track_id]
+            cursor.execute(sql, (
+            track_id, 
+            float(vals['rms_mean']),
+            float(vals['rms_median']),
+            float(vals['rms_std']),
+            float(vals['rms_skewness']),
+            float(vals['rms_kurtosis']),
+            float(vals['rms_rms']),
+            float(vals['rms_delta'])
+            ))
+            connection.commit()
 
         except Exception as e:
             print(f"Error processing RMS std for track {track_id}: {e}")
@@ -1150,6 +1320,30 @@ def extract_spectral_centroid(mono_loaded_audio, frame_size=2048, hop_size=1024,
                 'centroid_rms': 0.0,
                 'centroid_delta': 0.0
             }
+        cursor = connection.cursor()
+        sql = """INSERT INTO processed_sound_data (
+                    track_id, centroid_mean, centroid_median, centroid_std, centroid_skewness, centroid_kurtosis, centroid_rms, centroid_delta) values (?, ?, ?, ?, ?, ?, ?, ?) 
+                    ON CONFLICT(track_id) DO UPDATE SET 
+                    centroid_mean = excluded.centroid_mean,
+                    centroid_median = excluded.centroid_median,
+                    centroid_std = excluded.centroid_std,
+                    centroid_skewness = excluded.centroid_skewness, 
+                    centroid_kurtosis = excluded.centroid_kurtosis , 
+                    centroid_rms = excluded.centroid_rms, 
+                    centroid_delta = excluded.centroid_delta"""
+        # Get the correct values from the processed_data_pitch_melodia dict for this track
+        vals = centroid_processed_data[track_id]
+        cursor.execute(sql, (
+        track_id, 
+        float(vals['centroid_mean']),
+        float(vals['centroid_median']),
+        float(vals['centroid_std']),
+        float(vals['centroid_skewness']),
+        float(vals['centroid_kurtosis']),
+        float(vals['centroid_rms']),
+        float(vals['centroid_delta'])
+        ))
+        connection.commit()
 
     return centroid_processed_data
 
@@ -1758,9 +1952,9 @@ def process(track_id_to_path,mono_loaded_audio, eqloud_loaded_audio):
     processed_spectral_peaks = extract_spectral_peaks(mono_loaded_audio)
     # Call the function to extract onset rate
     processed_data_onset_rate = extract_onset_rate(mono_loaded_audio)
-    print(processed_data_onset_rate)
+    #print(processed_data_onset_rate)
     # Call the function to extract loudness mean
-    processed_loudness_mean = extract_loudness_mean(mono_loaded_audio)
+    processed_loudness_mean = extract_loudness(mono_loaded_audio)
     # Call the function to extract RMS energy standard deviation
     processed_rms_energy_std = extract_rms_energy_std(mono_loaded_audio)
     # Call the function to extract dynamic range
@@ -1973,7 +2167,7 @@ def batch_process_audio(track_id_to_path, page=30, max_songs=None, json_filename
             print(f"Processing batch of {batch_count} tracks, batch starting at index {batch_start}")
             batch_results = process(batch_track_id_to_path, mono_loaded_audio, eqloud_loaded_audio)
 
-            print(batch_results)
+            #print(batch_results)
             return 0
             '''if batch_results and isinstance(batch_results[0], (list, tuple)):
                 processed_list = batch_results

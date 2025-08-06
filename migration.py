@@ -1,6 +1,6 @@
 import sqlite3
 
-
+#todo: onset, vibrato
 connection = sqlite3.connect('sound_database.db')
 cursor = connection.cursor()
 cursor.execute("DROP TABLE IF EXISTS processed_sound_data;")
@@ -58,6 +58,20 @@ CREATE TABLE processed_sound_data (
     chord_progression BLOB,
     spectral_peaks BLOB,
     dissonance BLOB,
+    bpm_mean REAL, 
+    bpm_median REAL, 
+    bpm_std REAL, 
+    bpm_skewness REAL, 
+    bpm_kurtosis REAL, 
+    bpm_delta REAL,
+    onset_rate REAL,
+    onset_mean REAL, 
+    onset_median REAL, 
+    onset_std REAL,
+    onset_skewness REAL, 
+    onset_kurtosis REAL, 
+    onset_rms REAL, 
+    onset_delta REAL,
     loudness_mean REAL, 
     loudness_median REAL, 
     loudness_std REAL, 
@@ -79,6 +93,13 @@ CREATE TABLE processed_sound_data (
     rms_kurtosis REAL, 
     rms_rms REAL, 
     rms_delta REAL,
+    mfcc_mean REAL, 
+    mfcc_median REAL, 
+    mfcc_std REAL, 
+    mfcc_skewness REAL, 
+    mfcc_kurtosis REAL, 
+    mfcc_rms REAL, 
+    mfcc_delta REAL,
     centroid_mean REAL, 
     centroid_median REAL, 
     centroid_std REAL, 
@@ -93,6 +114,7 @@ CREATE TABLE processed_sound_data (
     segment_kurtosis REAL, 
     segment_rms REAL, 
     segment_delta REAL,
+    segment_count REAL,
     novelty_mean REAL,
     novelty_median REAL,
     novelty_std REAL, 

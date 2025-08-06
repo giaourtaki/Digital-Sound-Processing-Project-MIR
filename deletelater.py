@@ -908,25 +908,55 @@ def extract_bpm(mono_loaded_audio, sample_rate=44100):
         try:
             bpm, ticks, _, _, _ = rhythm_extractor(audio)
 
-            # Calculate standard deviation of instantaneous tempo
             if len(ticks) >= 2:
-                iois = np.diff(ticks)  # Inter-Onset Intervals in seconds
-                instantaneous_bpms = 60.0 / iois  # Convert to BPM
-                tempo_std = float(np.std(instantaneous_bpms)) # Tempo Stability extraction
+                iois = np.diff(ticks)
+                instantaneous_bpms = 60.0 / iois
+                bpm_mean = float(np.mean(instantaneous_bpms))
+                bpm_median = float(np.median(instantaneous_bpms))
+                bpm_std = float(np.std(instantaneous_bpms))
+                bpm_skewness = float(stats.skew(instantaneous_bpms))
+                bpm_kurtosis = float(stats.kurtosis(instantaneous_bpms))
+                bpm_delta = float(np.mean(np.diff(instantaneous_bpms))) if len(instantaneous_bpms) > 1 else 0.0
             else:
-                tempo_std = None  # Not enough ticks to compute std
+                bpm_mean = bpm_median = bpm_std = bpm_skewness = bpm_kurtosis = bpm_delta = 0.0
 
         except Exception as e:
             print(f"Error processing BPM for track {track_id}: {e}")
             bpm = None
             ticks = []
-            tempo_std = None
+            bpm_mean = bpm_median = bpm_std = bpm_skewness = bpm_kurtosis = bpm_delta = 0.0
 
         processed_data_bpm[track_id] = {
             'bpm': bpm,
             'ticks': ticks,
-            'tempo_std': tempo_std
+            'bpm_mean': bpm_mean,
+            'bpm_median': bpm_median,
+            'bpm_std': bpm_std,
+            'bpm_skewness': bpm_skewness,
+            'bpm_kurtosis': bpm_kurtosis,
+            'bpm_delta': bpm_delta
         }
+        cursor = connection.cursor()
+        sql = """INSERT INTO processed_sound_data (
+                    track_id, bpm_mean, bpm_median, bpm_std, bpm_skewness, bpm_kurtosis, bpm_delta) values (?, ?, ?, ?, ?, ?, ?) 
+                    ON CONFLICT(track_id) DO UPDATE SET 
+                    bpm_mean = excluded.bpm_mean,
+                    bpm_median = excluded.bpm_median,
+                    bpm_std = excluded.bpm_std,
+                    bpm_skewness = excluded.bpm_skewness,
+                    bpm_kurtosis = excluded.bpm_kurtosis,
+                    bpm_delta = excluded.bpm_delta"""
+        vals = processed_data_bpm[track_id]
+        cursor.execute(sql, (
+            track_id,
+            float(vals['bpm_mean']),
+            float(vals['bpm_median']),
+            float(vals['bpm_std']),
+            float(vals['bpm_skewness']),
+            float(vals['bpm_kurtosis']),
+            float(vals['bpm_delta'])
+        ))
+        connection.commit()
 
     return processed_data_bpm
 
@@ -935,29 +965,109 @@ def extract_bpm(mono_loaded_audio, sample_rate=44100):
 #endregion
 
 #region Onset Extraction
-def extract_onset_rate(mono_loaded_audio, sample_rate=44100):
-    processed_data_onset_rate = {}
+def extract_onset_features(mono_loaded_audio, sample_rate=44100, frame_size=1024, hop_size=512):
 
-    onset_rate_algo = es.OnsetRate()
+    processed_data_onset = {}
+    
+    # Setup algorithms
+    windowing = es.Windowing(type='hann')
+    spectrum = es.Spectrum()
+    cartesian_to_polar = es.CartesianToPolar()
+    onset_detection = es.OnsetDetection(method='hfc')  # Use 'hfc' method
+    onset_rate_algo = es.OnsetRate()  # Keep for comparison
 
     total_tracks = len(mono_loaded_audio)
 
     for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
         duration_sec = len(audio) / sample_rate
-        print(f"[{idx}/{total_tracks}] [Onset Rate] Processing track {track_id} ({duration_sec:.1f}s)")
+        print(f"[{idx}/{total_tracks}] [Onset Features] Processing track {track_id} ({duration_sec:.1f}s)")
 
         try:
-            onset_rate = onset_rate_algo(audio)
-            processed_data_onset_rate[track_id] = {
-                'onset_rate': onset_rate
+            # Frame-by-frame onset detection
+            onset_values = []
+            
+            for i in range(0, len(audio) - frame_size, hop_size):
+                frame = audio[i:i + frame_size]
+                windowed = windowing(frame)
+                spec = spectrum(windowed)
+                # Convert to polar coordinates to get magnitude and phase
+                mag, phase = cartesian_to_polar(spec)
+                # OnsetDetection requires both magnitude and phase as arguments
+                onset_val = onset_detection(mag, phase)
+                onset_values.append(float(onset_val))
+            
+            if len(onset_values) == 0:
+                raise ValueError("No onset values extracted")
+            
+            onset_array = np.array(onset_values)
+            
+            # Get traditional onset rate for comparison
+            onset_rate_result = onset_rate_algo(audio)
+            if isinstance(onset_rate_result, (tuple, list, np.ndarray)):
+                onset_rate = float(onset_rate_result[0]) if len(onset_rate_result) > 0 else 0.0
+            else:
+                onset_rate = float(onset_rate_result)
+            
+            # Extract statistical features only
+            processed_data_onset[track_id] = {
+                # Traditional onset rate
+                'onset_rate': onset_rate,
+                
+                # Statistical features of onset detection function
+                'onset_mean': float(np.mean(onset_array)),
+                'onset_median': float(np.median(onset_array)),
+                'onset_std': float(np.std(onset_array)),
+                'onset_skewness': float(skew(onset_array)),
+                'onset_kurtosis': float(kurtosis(onset_array)),
+                'onset_rms': float(np.sqrt(np.mean(np.square(onset_array)))),
+                'onset_delta': float(np.mean(np.diff(onset_array))) if len(onset_array) > 1 else 0.0
             }
+            
+            # Database insertion
+            cursor = connection.cursor()
+            vals = processed_data_onset[track_id]
+            
+            sql = """INSERT INTO processed_sound_data (
+                        track_id, onset_rate, onset_mean, onset_median, onset_std,
+                        onset_skewness, onset_kurtosis, onset_rms, onset_delta
+                        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?) 
+                        ON CONFLICT(track_id) DO UPDATE SET 
+                        onset_rate = excluded.onset_rate,
+                        onset_mean = excluded.onset_mean,
+                        onset_median = excluded.onset_median,
+                        onset_std = excluded.onset_std,
+                        onset_skewness = excluded.onset_skewness,
+                        onset_kurtosis = excluded.onset_kurtosis,
+                        onset_rms = excluded.onset_rms,
+                        onset_delta = excluded.onset_delta"""
+            
+            cursor.execute(sql, (
+                track_id,
+                vals['onset_rate'],
+                vals['onset_mean'],
+                vals['onset_median'], 
+                vals['onset_std'],
+                vals['onset_skewness'],
+                vals['onset_kurtosis'],
+                vals['onset_rms'],
+                vals['onset_delta']
+            ))
+            connection.commit()
+            
         except Exception as e:
-            print(f"Error processing onset rate for track {track_id}: {e}")
-            processed_data_onset_rate[track_id] = {
-                'onset_rate': None
+            print(f"Error processing onset features for track {track_id}: {e}")
+            processed_data_onset[track_id] = {
+                'onset_rate': None,
+                'onset_mean': None,
+                'onset_median': None,
+                'onset_std': None,
+                'onset_skewness': None,
+                'onset_kurtosis': None,
+                'onset_rms': None,
+                'onset_delta': None
             }
 
-    return processed_data_onset_rate
+    return processed_data_onset
 
 # Test print
 #print(processed_data_onset_rate)
@@ -993,24 +1103,85 @@ def extract_beat_histogram(mono_loaded_audio, frame_size=1024, hop_size=512, sam
             if len(novelty_curve) == 0:
                 raise ValueError("Novelty curve (onset function) is empty.")
 
-            # Convert to plain Python float list
             novelty_curve_floats = [float(x) for x in novelty_curve]
-
             histogram, bpm1, bpm2 = bpm_histogram_algo(novelty_curve_floats)
 
-            processed_data_beat_histogram[track_id] = {
-                'beat_histogram': histogram,
-                'bpm_peak_1': bpm1,
-                'bpm_peak_2': bpm2
+            # Generate BPM bins for histogram statistics
+            bpm_bins = np.linspace(0, 250, len(histogram))  # Assuming histogram spans 0-250 BPM
+            hist_mean = np.average(bpm_bins, weights=histogram)
+
+            # Calculate histogram features
+            hist_features = {
+                'hist_mean': hist_mean,
+                'hist_std': float(np.sqrt(np.average((bpm_bins - hist_mean)**2, weights=histogram))),
+                'hist_skewness': float(skew(histogram)),
+                'hist_kurtosis': float(kurtosis(histogram)),
+                'hist_entropy': float(-np.sum(histogram * np.log(histogram + 1e-10)))
             }
+
+            # Find peak indices for peak features
+            peak1_idx = np.where(bpm_bins >= bpm1)[0][0] if bpm1 else 0
+            peak2_idx = np.where(bpm_bins >= bpm2)[0][0] if bpm2 else 0
+
+            # Calculate peak features
+            peak_features = {
+                'primary_bpm': float(bpm1) if bpm1 else 0.0,
+                'secondary_bpm': float(bpm2) if bpm2 else 0.0,
+                'bpm_ratio': float(bpm2 / bpm1) if bpm1 and bpm1 > 0 else 0.0,
+                'peak_strength_ratio': float(histogram[peak2_idx] / histogram[peak1_idx]) if peak1_idx > 0 and histogram[peak1_idx] > 0 else 0.0
+            }
+
+            processed_data_beat_histogram[track_id] = {
+                'beat_histogram': histogram.tolist(),
+                **hist_features,
+                **peak_features
+            }
+
+            # Insert into database
+            cursor = connection.cursor()
+            sql = """INSERT INTO processed_sound_data (
+                        track_id, hist_mean, hist_std, hist_skewness, hist_kurtosis, hist_entropy,
+                        primary_bpm, secondary_bpm, bpm_ratio, peak_strength_ratio) 
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
+                    ON CONFLICT(track_id) DO UPDATE SET 
+                        hist_mean = excluded.hist_mean,
+                        hist_std = excluded.hist_std,
+                        hist_skewness = excluded.hist_skewness,
+                        hist_kurtosis = excluded.hist_kurtosis,
+                        hist_entropy = excluded.hist_entropy,
+                        primary_bpm = excluded.primary_bpm,
+                        secondary_bpm = excluded.secondary_bpm,
+                        bpm_ratio = excluded.bpm_ratio,
+                        peak_strength_ratio = excluded.peak_strength_ratio"""
+            cursor.execute(sql, (
+                track_id,
+                hist_features['hist_mean'],
+                hist_features['hist_std'],
+                hist_features['hist_skewness'],
+                hist_features['hist_kurtosis'],
+                hist_features['hist_entropy'],
+                peak_features['primary_bpm'],
+                peak_features['secondary_bpm'],
+                peak_features['bpm_ratio'],
+                peak_features['peak_strength_ratio']
+            ))
+            connection.commit()
 
         except Exception as e:
             print(f"Error processing beat histogram for track {track_id}: {e}")
             processed_data_beat_histogram[track_id] = {
                 'beat_histogram': None,
-                'bpm_peak_1': None,
-                'bpm_peak_2': None
+                'hist_mean': 0.0,
+                'hist_std': 0.0,
+                'hist_skewness': 0.0,
+                'hist_kurtosis': 0.0,
+                'hist_entropy': 0.0,
+                'primary_bpm': 0.0,
+                'secondary_bpm': 0.0,
+                'bpm_ratio': 0.0,
+                'peak_strength_ratio': 0.0
             }
+            print(processed_data_beat_histogram)
 
     return processed_data_beat_histogram
 # Call the function to extract onset rate
@@ -1302,13 +1473,13 @@ def extract_mfcc(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=
                 'mfcc_coefficients': mfcc_coeffs,
                 'mfcc_bands': mfcc_bands,
                 'mfcc_times': times,
-                'mfcc_mean': mfcc_array.mean(axis=0).tolist(),
-                'mfcc_median': np.median(mfcc_array, axis=0).tolist(),
-                'mfcc_std': mfcc_array.std(axis=0).tolist(),
-                'mfcc_skewness': skew(mfcc_array, axis=0).tolist(),
-                'mfcc_kurtosis': kurtosis(mfcc_array, axis=0).tolist(),
-                'mfcc_rms': np.sqrt(np.mean(np.square(mfcc_array), axis=0)).tolist(),
-                'mfcc_delta': np.mean(np.diff(mfcc_array, axis=0), axis=0).tolist() if len(mfcc_array) > 1 else np.zeros(mfcc_array.shape[1]).tolist()
+                'mfcc_mean': mfcc_array.mean(axis=0),
+                'mfcc_median': np.median(mfcc_array, axis=0),
+                'mfcc_std': mfcc_array.std(axis=0),
+                'mfcc_skewness': skew(mfcc_array, axis=0),
+                'mfcc_kurtosis': kurtosis(mfcc_array, axis=0),
+                'mfcc_rms': np.sqrt(np.mean(np.square(mfcc_array), axis=0)),
+                'mfcc_delta': np.mean(np.diff(mfcc_array, axis=0), axis=0) if len(mfcc_array) > 1 else np.zeros(mfcc_array.shape[1])
             }
         else:
             empty_features = []
@@ -1324,7 +1495,31 @@ def extract_mfcc(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=
                 'mfcc_rms': empty_features,
                 'mfcc_delta': empty_features
             }
-
+        cursor = connection.cursor()
+        sql = """INSERT INTO processed_sound_data (
+                    track_id, mfcc_mean, mfcc_median, mfcc_std, mfcc_skewness, mfcc_kurtosis, mfcc_rms, mfcc_delta) values (?, ?, ?, ?, ?, ?, ?, ?) 
+                    ON CONFLICT(track_id) DO UPDATE SET 
+                    mfcc_mean = excluded.mfcc_mean,
+                    mfcc_median = excluded.mfcc_median,
+                    mfcc_std = excluded.mfcc_std,
+                    mfcc_skewness = excluded.mfcc_skewness, 
+                    mfcc_kurtosis = excluded.mfcc_kurtosis , 
+                    mfcc_rms = excluded.mfcc_rms, 
+                    mfcc_delta = excluded.mfcc_delta"""
+        vals = processed_data_mfcc[track_id]
+        # Store only the mean of each MFCC statistics array as a float
+        cursor.execute(sql, (
+            track_id,
+            float(np.mean(vals['mfcc_mean'])) if isinstance(vals['mfcc_mean'], (np.ndarray, list)) and len(vals['mfcc_mean']) > 0 else 0.0,
+            float(np.mean(vals['mfcc_median'])) if isinstance(vals['mfcc_median'], (np.ndarray, list)) and len(vals['mfcc_median']) > 0 else 0.0,
+            float(np.mean(vals['mfcc_std'])) if isinstance(vals['mfcc_std'], (np.ndarray, list)) and len(vals['mfcc_std']) > 0 else 0.0,
+            float(np.mean(vals['mfcc_skewness'])) if isinstance(vals['mfcc_skewness'], (np.ndarray, list)) and len(vals['mfcc_skewness']) > 0 else 0.0,
+            float(np.mean(vals['mfcc_kurtosis'])) if isinstance(vals['mfcc_kurtosis'], (np.ndarray, list)) and len(vals['mfcc_kurtosis']) > 0 else 0.0,
+            float(np.mean(vals['mfcc_rms'])) if isinstance(vals['mfcc_rms'], (np.ndarray, list)) and len(vals['mfcc_rms']) > 0 else 0.0,
+            float(np.mean(vals['mfcc_delta'])) if isinstance(vals['mfcc_delta'], (np.ndarray, list)) and len(vals['mfcc_delta']) > 0 else 0.0
+        ))
+        connection.commit()
+        #print(processed_data_mfcc)
     return processed_data_mfcc
 
 
@@ -1339,7 +1534,8 @@ def extract_spectral_centroid(mono_loaded_audio, frame_size=2048, hop_size=1024,
 
     window = es.Windowing(type='hann')
     spectrum_algo = es.Spectrum()
-    spectral_centroid = es.CentralMoments()
+    # Using SpectralCentroid algorithm instead of CentralMoments
+    spectral_centroid = es.Centroid(range=sample_rate/2.0)  # Set range to Nyquist frequency
 
     total_tracks_len = len(mono_loaded_audio)
 
@@ -1354,11 +1550,15 @@ def extract_spectral_centroid(mono_loaded_audio, frame_size=2048, hop_size=1024,
             if len(frame) < frame_size:
                 break
 
-            spectrum = spectrum_algo(window(frame))
-            moments = spectral_centroid(spectrum)
-            centroid = moments[1]  # 1st moment is the centroid
-            centroids.append(centroid)
-            times.append(i / sample_rate)
+            # Compute spectrum
+            windowed_frame = window(frame)
+            spectrum = spectrum_algo(windowed_frame)
+            
+            # Calculate spectral centroid
+            centroid = spectral_centroid(spectrum)  # Returns frequency in Hz
+            if not np.isnan(centroid):  # Skip NaN values
+                centroids.append(centroid)
+                times.append(i / sample_rate)
 
         if centroids:
             centroid_array = np.array(centroids)
@@ -1424,7 +1624,6 @@ def extract_spectral_centroid(mono_loaded_audio, frame_size=2048, hop_size=1024,
 #region Segment Count Extraction
 
 def extract_segment_boundaries_and_novelty(eqloud_loaded_audio, frame_size=1024, hop_size=512, sample_rate=44100):
-
     segment_data = {}
 
     window = es.Windowing(type='hann')
@@ -1435,30 +1634,59 @@ def extract_segment_boundaries_and_novelty(eqloud_loaded_audio, frame_size=1024,
     for idx, (track_id, audio) in enumerate(eqloud_loaded_audio.items(), start=1):
         print(f"[{idx}/{total_tracks_len}] [Boundaries & Novelty] Processing track {track_id}")
 
-        onset_env = []
-        for i in range(0, len(audio) - frame_size, hop_size):
-            frame = audio[i:i + frame_size]
-            w = window(frame)
+        try:
+            onset_env = []
+            for i in range(0, len(audio) - frame_size, hop_size):
+                frame = audio[i:i + frame_size]
+                w = window(frame)
 
-            fft_complex = fft(w)
-            mag = np.abs(fft_complex)
-            phase = np.angle(fft_complex)
+                fft_complex = fft(w)
+                mag = np.abs(fft_complex)
+                phase = np.angle(fft_complex)
 
-            onset_val = onset_detection(mag, phase)
-            onset_env.append(onset_val)
+                onset_val = onset_detection(mag, phase)
+                onset_env.append(onset_val)
 
-        onset_env = np.array(onset_env)
-        peaks, _ = find_peaks(onset_env, height=0.3, distance=10)
-        segment_boundaries = [p * hop_size / sample_rate for p in peaks]
+            onset_env = np.array(onset_env)
+            peaks, _ = find_peaks(onset_env, height=0.3, distance=10)
+            segment_boundaries = [p * hop_size / sample_rate for p in peaks]
+            
+            # Calculate segment count (number of boundaries + 1)
+            segment_count = len(segment_boundaries) + 1
+            audio_duration = len(audio) / sample_rate
 
-        audio_duration = len(audio) / sample_rate
+            segment_data[track_id] = {
+                'segment_boundaries_sec': segment_boundaries,
+                'onset_envelope': onset_env,
+                'audio_duration_sec': audio_duration,
+                'segment_count': segment_count
+            }
 
-        segment_data[track_id] = {
-            'segment_boundaries_sec': segment_boundaries,
-            'onset_envelope': onset_env,
-            'audio_duration_sec': audio_duration
-        }
-        
+            # Store segment count in database
+            cursor = connection.cursor()
+            sql = """INSERT INTO processed_sound_data (
+                        track_id, segment_count) values (?, ?) 
+                        ON CONFLICT(track_id) DO UPDATE SET 
+                        segment_count = excluded.segment_count"""
+            cursor.execute(sql, (track_id, segment_count))
+            connection.commit()
+
+        except Exception as e:
+            print(f"Error processing segments for track {track_id}: {e}")
+            segment_data[track_id] = {
+                'segment_boundaries_sec': [],
+                'onset_envelope': np.array([]),
+                'audio_duration_sec': 0.0,
+                'segment_count': 0
+            }
+            # Store default values in case of error
+            cursor = connection.cursor()
+            sql = """INSERT INTO processed_sound_data (
+                        track_id, segment_count) values (?, ?) 
+                        ON CONFLICT(track_id) DO UPDATE SET 
+                        segment_count = excluded.segment_count"""
+            cursor.execute(sql, (track_id, 0))
+            connection.commit()
 
     return segment_data
 
@@ -2249,9 +2477,11 @@ def process(track_id_to_path,mono_loaded_audio, eqloud_loaded_audio):
     # Call the function to extract BPM
     processed_data_bpm = extract_bpm(mono_loaded_audio)
     # Call the function to extract spectral peaks
+    #processed_data_hist = extract_beat_histogram(mono_loaded_audio)
+    # Call the function to extract spectral peaks
     processed_spectral_peaks = extract_spectral_peaks(mono_loaded_audio)
     # Call the function to extract onset rate
-    processed_data_onset_rate = extract_onset_rate(mono_loaded_audio)
+    processed_data_onset_rate = extract_onset_features(mono_loaded_audio)
     #print(processed_data_onset_rate)
     # Call the function to extract loudness mean
     processed_loudness_mean = extract_loudness(mono_loaded_audio)

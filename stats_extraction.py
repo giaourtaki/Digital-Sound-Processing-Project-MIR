@@ -6,8 +6,7 @@
 
 #region Imports
 import os
-import csv
-import json
+
 
 import IPython.display as ipd
 import pandas as pd
@@ -95,10 +94,10 @@ genre_ids = {
 
 # Set limits for each genre TODO: change this to 80 songs per genre
 genre_limits = {
-    'Pop': 1,
-    'Rock': 1,
-    'Metal': 1,
-    'Punk': 1
+    'Pop': 80,
+    'Rock': 80,
+    'Metal': 80,
+    'Punk': 80
 }
 genre_counts = {
     'Pop': 0,
@@ -151,18 +150,32 @@ def collect_track_paths(base_dir, track_id_to_genre):
                 except ValueError:
                     # In case the filename is not a valid int
                     continue
-    
-   # print(f"Found paths for {len(track_id_to_path)} out of {len(track_id_to_genre)} tracks.")
-   
+                
+                
+    # Insert genres for all tracks
+    cursor = connection.cursor()
+    for track_id, genre in track_id_to_genre.items():
+        sql = """INSERT INTO processed_sound_data (
+                    track_id, genre) values (?, ?) 
+                    ON CONFLICT(track_id) DO UPDATE SET 
+                    genre = excluded.genre"""
+        cursor.execute(sql, (track_id, genre))
+    connection.commit()
+# print(f"Found paths for {len(track_id_to_path)} out of {len(track_id_to_genre)} tracks.")
+
     return track_id_to_path
 
 track_id_to_path_another_name = collect_track_paths(base_dir, track_id_to_genre)
 # Test print
 print(f"Collected {len(track_id_to_path_another_name)} tracks:")
+
+
+exit() #remove comment if it needs to run for real
+
 #missing_ids = set(track_id_to_genre.keys()) - set(track_id_to_path.keys())
 #print("Missing track IDs (no .mp3 file found):", missing_ids)
 #for tid, path in track_id_to_path.items():
-  #  print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}, Path: {path}")
+#  print(f"Track ID: {tid}, Genre: {track_id_to_genre[tid]}, Path: {path}")
 #print(len(track_id_to_path))
 #print(track_id_to_path)
 
@@ -966,72 +979,73 @@ def extract_bpm(mono_loaded_audio, sample_rate=44100):
 
 #region Onset Extraction
 def extract_onset_features(mono_loaded_audio, sample_rate=44100, frame_size=1024, hop_size=512):
-
-    processed_data_onset = {}
+    """
+    Extract onset-related features from audio tracks using both OnsetRate and OnsetDetection algorithms.
     
-    # Setup algorithms
-    windowing = es.Windowing(type='hann')
-    spectrum = es.Spectrum()
-    cartesian_to_polar = es.CartesianToPolar()
-    onset_detection = es.OnsetDetection(method='hfc')  # Use 'hfc' method
-    onset_rate_algo = es.OnsetRate()  # Keep for comparison
-
-    total_tracks = len(mono_loaded_audio)
-
-    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
-        duration_sec = len(audio) / sample_rate
-        print(f"[{idx}/{total_tracks}] [Onset Features] Processing track {track_id} ({duration_sec:.1f}s)")
-
+    Args:
+        mono_loaded_audio (dict): Dictionary of mono audio tracks
+        sample_rate (int): Audio sample rate (default: 44100 Hz)
+        frame_size (int): Size of each frame for analysis (default: 1024 samples)
+        hop_size (int): Number of samples between successive frames (default: 512 samples)
+    
+    Returns:
+        dict: Dictionary containing onset features for each track
+    """
+    def safe_convert_to_float(value):
+        """Helper function to safely convert numpy values to float"""
         try:
-            # Frame-by-frame onset detection
-            onset_values = []
-            
-            for i in range(0, len(audio) - frame_size, hop_size):
-                frame = audio[i:i + frame_size]
-                windowed = windowing(frame)
-                spec = spectrum(windowed)
-                # Convert to polar coordinates to get magnitude and phase
-                mag, phase = cartesian_to_polar(spec)
-                # OnsetDetection requires both magnitude and phase as arguments
-                onset_val = onset_detection(mag, phase)
-                onset_values.append(float(onset_val))
-            
-            if len(onset_values) == 0:
-                raise ValueError("No onset values extracted")
-            
-            onset_array = np.array(onset_values)
-            
-            # Get traditional onset rate for comparison
-            onset_rate_result = onset_rate_algo(audio)
-            if isinstance(onset_rate_result, (tuple, list, np.ndarray)):
-                onset_rate = float(onset_rate_result[0]) if len(onset_rate_result) > 0 else 0.0
-            else:
-                onset_rate = float(onset_rate_result)
-            
-            # Extract statistical features only
-            processed_data_onset[track_id] = {
-                # Traditional onset rate
-                'onset_rate': onset_rate,
-                
-                # Statistical features of onset detection function
-                'onset_mean': float(np.mean(onset_array)),
-                'onset_median': float(np.median(onset_array)),
-                'onset_std': float(np.std(onset_array)),
-                'onset_skewness': float(skew(onset_array)),
-                'onset_kurtosis': float(kurtosis(onset_array)),
-                'onset_rms': float(np.sqrt(np.mean(np.square(onset_array)))),
-                'onset_delta': float(np.mean(np.diff(onset_array))) if len(onset_array) > 1 else 0.0
+            if isinstance(value, (np.ndarray, list)):
+                value = np.asarray(value).flatten()
+                # Check if array is empty
+                if value.size == 0:
+                    return 0.0
+                return float(value[0])
+            return float(value)
+        except (TypeError, ValueError, IndexError) as e:
+            print(f"Warning: Could not convert value to float: {str(e)}")
+            return 0.0
+
+    def calculate_statistics(onset_array):
+        """Calculate statistical features from onset detection values"""
+        if len(onset_array) == 0:
+            return {
+                'mean': 0.0,
+                'median': 0.0,
+                'std': 0.0,
+                'skewness': 0.0,
+                'kurtosis': 0.0,
+                'rms': 0.0,
+                'delta': 0.0
             }
+        
+        try:
+            # Convert to numpy array and ensure 1D
+            onset_array = np.asarray(onset_array).flatten()
             
-            # Database insertion
+            # Calculate statistics
+            stats = {
+                'mean': safe_convert_to_float(np.mean(onset_array)),
+                'median': safe_convert_to_float(np.median(onset_array)),
+                'std': safe_convert_to_float(np.std(onset_array)),
+                'skewness': safe_convert_to_float(skew(onset_array)),
+                'kurtosis': safe_convert_to_float(kurtosis(onset_array)),
+                'rms': safe_convert_to_float(np.sqrt(np.mean(np.square(onset_array)))),
+                'delta': safe_convert_to_float(np.mean(np.diff(onset_array))) if len(onset_array) > 1 else 0.0
+            }
+            return stats
+        except Exception as e:
+            print(f"Warning: Error calculating statistics: {e}")
+            return {key: 0.0 for key in ['mean', 'median', 'std', 'skewness', 'kurtosis', 'rms', 'delta']}
+
+    def save_to_database(track_id, features):
+        """Save onset features to database"""
+        try:
             cursor = connection.cursor()
-            vals = processed_data_onset[track_id]
-            
             sql = """INSERT INTO processed_sound_data (
                         track_id, onset_rate, onset_mean, onset_median, onset_std,
                         onset_skewness, onset_kurtosis, onset_rms, onset_delta
-                        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?) 
-                        ON CONFLICT(track_id) DO UPDATE SET 
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) 
+                    ON CONFLICT(track_id) DO UPDATE SET 
                         onset_rate = excluded.onset_rate,
                         onset_mean = excluded.onset_mean,
                         onset_median = excluded.onset_median,
@@ -1043,28 +1057,75 @@ def extract_onset_features(mono_loaded_audio, sample_rate=44100, frame_size=1024
             
             cursor.execute(sql, (
                 track_id,
-                vals['onset_rate'],
-                vals['onset_mean'],
-                vals['onset_median'], 
-                vals['onset_std'],
-                vals['onset_skewness'],
-                vals['onset_kurtosis'],
-                vals['onset_rms'],
-                vals['onset_delta']
+                features['onset_rate'],
+                features['onset_mean'],
+                features['onset_median'],
+                features['onset_std'],
+                features['onset_skewness'],
+                features['onset_kurtosis'],
+                features['onset_rms'],
+                features['onset_delta']
             ))
             connection.commit()
-            
+        except Exception as e:
+            print(f"Error saving to database for track {track_id}: {e}")
+
+    # Initialize Essentia algorithms
+    windowing = es.Windowing(type='hann')
+    spectrum = es.Spectrum()
+    onset_detection = es.OnsetDetection(method='complex')
+    onset_rate_algo = es.OnsetRate()
+
+    processed_data_onset = {}
+    total_tracks = len(mono_loaded_audio)
+
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
+        duration_sec = len(audio) / sample_rate
+        print(f"[{idx}/{total_tracks}] [Onset Features] Processing track {track_id} ({duration_sec:.1f}s)")
+
+        try:
+            # Process frames for onset detection
+            onset_detection_values = []
+            for i in range(0, len(audio) - frame_size, hop_size):
+                frame = audio[i:i + frame_size]
+                windowed = windowing(frame)
+                spec = spectrum(windowed)
+                onset_val = onset_detection(spec, spec)
+                onset_detection_values.append(safe_convert_to_float(onset_val))
+
+            # Calculate onset rate
+            onset_rate_value, _ = onset_rate_algo(audio)
+            onset_rate = safe_convert_to_float(onset_rate_value)
+
+            # Calculate statistics
+            stats = calculate_statistics(onset_detection_values)
+
+            # Store results
+            processed_data_onset[track_id] = {
+                'onset_rate': onset_rate,
+                'onset_mean': stats['mean'],
+                'onset_median': stats['median'],
+                'onset_std': stats['std'],
+                'onset_skewness': stats['skewness'],
+                'onset_kurtosis': stats['kurtosis'],
+                'onset_rms': stats['rms'],
+                'onset_delta': stats['delta']
+            }
+
+            # Save to database
+            save_to_database(track_id, processed_data_onset[track_id])
+
         except Exception as e:
             print(f"Error processing onset features for track {track_id}: {e}")
             processed_data_onset[track_id] = {
-                'onset_rate': None,
-                'onset_mean': None,
-                'onset_median': None,
-                'onset_std': None,
-                'onset_skewness': None,
-                'onset_kurtosis': None,
-                'onset_rms': None,
-                'onset_delta': None
+                'onset_rate': 0.0,
+                'onset_mean': 0.0,
+                'onset_median': 0.0,
+                'onset_std': 0.0,
+                'onset_skewness': 0.0,
+                'onset_kurtosis': 0.0,
+                'onset_rms': 0.0,
+                'onset_delta': 0.0
             }
 
     return processed_data_onset
@@ -1910,88 +1971,226 @@ def extract_log_attack_time(mono_loaded_audio, frame_size=2048, hop_size=1024, s
 #endregion
 
 #region Vibrato Extraction
-def extract_vibrato(mono_loaded_audio, frame_size=2048, hop_size=1024, sample_rate=44100):
+def extract_vibrato(mono_loaded_audio, frame_size=8192, hop_size=2048, sample_rate=44100):
+    """
+    Extract vibrato-related features from audio tracks using Essentia's Vibrato algorithm.
+    The algorithm detects vibrato presence and estimates its parameters (frequency and extent)
+    from the audio signal.
+    
+    Args:
+        mono_loaded_audio (dict): Dictionary of mono audio tracks
+        frame_size (int): Size of each frame for analysis
+        hop_size (int): Number of samples between successive frames
+        sample_rate (int): Audio sample rate in Hz
+    
+    Returns:
+        dict: Dictionary containing vibrato features (frequency and extent) for each track
+    """
+    def calculate_statistics(values):
+        """Calculate comprehensive statistical features from an array of values"""
+        default_stats = {
+            'mean': 0.0,
+            'median': 0.0,
+            'std': 0.0,
+            'skewness': 0.0,
+            'kurtosis': 0.0,
+            'max': 0.0,
+            'delta': 0.0
+        }
+        
+        try:
+            # Handle empty or invalid input
+            if not isinstance(values, (list, np.ndarray)) or len(values) == 0:
+                return default_stats
 
+            # Convert to numpy array and filter positive values
+            values = np.asarray(values, dtype=np.float32)
+            values = values[values > 0]
+            
+            # Return defaults if no valid values
+            if len(values) == 0:
+                return default_stats
+                
+            # Calculate statistics safely
+            stats = default_stats.copy()
+            stats.update({
+                'mean': float(np.mean(values)),
+                'median': float(np.median(values)),
+                'std': float(np.std(values)),
+                'skewness': float(skew(values)),
+                'kurtosis': float(kurtosis(values)),
+                'max': float(np.max(values)),
+                'delta': float(np.mean(np.diff(values))) if len(values) > 1 else 0.0
+            })
+            return stats
+            
+        except Exception as e:
+            print(f"Warning: Error calculating statistics: {e}")
+            return default_stats
+
+    def save_to_database(track_id, features):
+        """Save vibrato features to database"""
+        try:
+            cursor = connection.cursor()
+            
+            # Prepare column names and placeholders
+            columns = [
+                'track_id',
+                'vibrato_frequency_mean', 'vibrato_frequency_median', 'vibrato_frequency_std',
+                'vibrato_frequency_skewness', 'vibrato_frequency_kurtosis', 'vibrato_frequency_max',
+                'vibrato_frequency_delta',
+                'vibrato_extent_mean', 'vibrato_extent_median', 'vibrato_extent_std',
+                'vibrato_extent_skewness', 'vibrato_extent_kurtosis', 'vibrato_extent_max',
+                'vibrato_extent_delta',
+                'vibrato_presence'
+            ]
+            
+            placeholders = ','.join(['?' for _ in columns])
+            column_names = ','.join(columns)
+            update_stmt = ','.join(f"{col} = excluded.{col}" for col in columns[1:])
+            
+            sql = f"""
+                INSERT INTO processed_sound_data ({column_names})
+                VALUES ({placeholders})
+                ON CONFLICT(track_id) DO UPDATE SET {update_stmt}
+            """
+            
+            # Prepare values ensuring they are all floats
+            values = [
+                track_id,
+                float(features['vibrato_frequency_mean']),
+                float(features['vibrato_frequency_median']),
+                float(features['vibrato_frequency_std']),
+                float(features['vibrato_frequency_skewness']),
+                float(features['vibrato_frequency_kurtosis']),
+                float(features['vibrato_frequency_max']),
+                float(features['vibrato_frequency_delta']),
+                float(features['vibrato_extent_mean']),
+                float(features['vibrato_extent_median']),
+                float(features['vibrato_extent_std']),
+                float(features['vibrato_extent_skewness']),
+                float(features['vibrato_extent_kurtosis']),
+                float(features['vibrato_extent_max']),
+                float(features['vibrato_extent_delta']),
+                float(features['vibrato_presence'])
+            ]
+            
+            cursor.execute(sql, values)
+            connection.commit()
+            
+        except Exception as e:
+            print(f"Error saving to database for track {track_id}: {e}")
+
+    # Initialize algorithms with proper parameters
+    window = es.Windowing(type='hann', size=8192)  # Larger window for better frequency resolution
+    spectrum = es.Spectrum()
+    pitch_detector = es.PitchYinFFT()  # Add pitch detection first
+    vibrato = es.Vibrato(
+        maxExtend=250,  # Maximum vibrato extent in cents
+        minExtend=50,   # Minimum vibrato extent in cents
+        maxFrequency=8, # Maximum vibrato frequency in Hz
+        minFrequency=4, # Minimum vibrato frequency in Hz
+        sampleRate=44100 # Explicitly set sample rate
+    )
 
     vibrato_data = {}
-
-    window = es.Windowing(type='hann')
-    vibrato = es.Vibrato()
-
     total_tracks_len = len(mono_loaded_audio)
-    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
-        vibrato_values = []
-        times = []
 
+    # Process each track
+    for idx, (track_id, audio) in enumerate(mono_loaded_audio.items(), start=1):
         duration_sec = len(audio) / sample_rate
         num_frames = (len(audio) - frame_size) // hop_size
         print(f"[{idx}/{total_tracks_len}] [Vibrato] Processing track {track_id} ({duration_sec:.1f}s, ~{num_frames} frames)")
 
-        for i in range(0, len(audio) - frame_size, hop_size):
-            frame = audio[i:i + frame_size]
-            if len(frame) < frame_size:
-                break
+        try:
+            frequencies = []
+            extents = []
+            times = []
 
-            # Apply windowing
-            windowed_frame = window(frame)
+            # Process frames
+            for i in range(0, len(audio) - frame_size, hop_size):
+                frame = audio[i:i + frame_size]
+                if len(frame) < frame_size:
+                    break
 
-            # Compute Vibrato 
-            vib_value = vibrato(windowed_frame)
-            vibrato_values.append(vib_value)
-            times.append(i / sample_rate)
+                # Window and get spectrum
+                windowed_frame = window(frame)
+                frame_spectrum = spectrum(windowed_frame)
+                
+                # First detect pitch
+                pitch, pitch_confidence = pitch_detector(frame_spectrum)
+                
+                # Only process frames with confident pitch detection
+                if isinstance(pitch_confidence, (int, float)) and pitch_confidence > 0.8:
+                    if isinstance(pitch, (int, float)) and pitch > 0:
+                        # Get vibrato characteristics
+                        freq, extent = vibrato(windowed_frame)
+                        
+                        # Safely append valid measurements
+                        if isinstance(freq, (int, float)) and isinstance(extent, (int, float)):
+                            frequencies.append(float(freq))
+                            extents.append(float(extent))
+                            times.append(float(i) / sample_rate)
+                
+                # Log progress every 10 seconds
+                if i % (sample_rate * 10) == 0 and i != 0:
+                    print(f"    ↳ Processed {i / sample_rate:.1f}s")
 
-            # Optional: log progress every 10 seconds (can be disabled if needed)
-            if i % (sample_rate * 10) == 0 and i != 0:
-                print(f"    ↳ Processed {i / sample_rate:.1f}s")
+            # Calculate vibrato presence ratio
+            total_frames = len(frequencies)
+            vibrato_frames = sum(1 for f, e in zip(frequencies, extents) if f > 0 and e > 0)
+            vibrato_presence = float(vibrato_frames / total_frames) if total_frames > 0 else 0.0
 
-        if vibrato_values:
-            vibrato_array = np.array(vibrato_values)
-            vibrato_data[track_id] = {
-                'vibrato_values': vibrato_values,
-                'vibrato_times': times,
-                'vibrato_mean': float(np.mean(vibrato_array)),
-                'vibrato_median': float(np.median(vibrato_array)),
-                'vibrato_std': float(np.std(vibrato_array)),
-                'vibrato_skewness': float(skew(vibrato_array)),
-                'vibrato_kurtosis': float(kurtosis(vibrato_array)),
-                'vibrato_rms': float(np.sqrt(np.mean(np.square(vibrato_array)))),
-                'vibrato_delta': float(np.mean(np.diff(vibrato_array))) if len(vibrato_array) > 1 else 0.0
+            # Calculate statistics for frequencies and extents
+            freq_stats = calculate_statistics(frequencies)
+            extent_stats = calculate_statistics(extents)
+            
+            features = {
+                'vibrato_frequency_mean': freq_stats['mean'],
+                'vibrato_frequency_median': freq_stats['median'],
+                'vibrato_frequency_std': freq_stats['std'],
+                'vibrato_frequency_skewness': freq_stats['skewness'],
+                'vibrato_frequency_kurtosis': freq_stats['kurtosis'],
+                'vibrato_frequency_max': freq_stats['max'],
+                'vibrato_frequency_delta': freq_stats['delta'],
+                'vibrato_extent_mean': extent_stats['mean'],
+                'vibrato_extent_median': extent_stats['median'],
+                'vibrato_extent_std': extent_stats['std'],
+                'vibrato_extent_skewness': extent_stats['skewness'],
+                'vibrato_extent_kurtosis': extent_stats['kurtosis'],
+                'vibrato_extent_max': extent_stats['max'],
+                'vibrato_extent_delta': extent_stats['delta'],
+                'vibrato_presence': vibrato_presence
             }
-        else:
+            
+            # Store detailed values for potential further analysis
             vibrato_data[track_id] = {
-                'vibrato_values': [],
-                'vibrato_times': [],
-                'vibrato_mean': 0.0,
-                'vibrato_median': 0.0,
-                'vibrato_std': 0.0,
-                'vibrato_skewness': 0.0,
-                'vibrato_kurtosis': 0.0,
-                'vibrato_rms': 0.0,
-                'vibrato_delta': 0.0
+                **features,
+                'frequencies': frequencies,
+                'extents': extents,
+                'times': times
             }
-        cursor = connection.cursor()
-        sql = """INSERT INTO processed_sound_data (
-                    track_id, vibrato_mean, vibrato_median, vibrato_std, vibrato_skewness, vibrato_kurtosis, vibrato_rms, vibrato_delta) values (?, ?, ?, ?, ?, ?, ?, ?) 
-                    ON CONFLICT(track_id) DO UPDATE SET 
-                    vibrato_mean = excluded.vibrato_mean,
-                    vibrato_median = excluded.vibrato_median,
-                    vibrato_std = excluded.vibrato_std,
-                    vibrato_skewness = excluded.vibrato_skewness, 
-                    vibrato_kurtosis = excluded.vibrato_kurtosis , 
-                    vibrato_rms = excluded.vibrato_rms, 
-                    vibrato_delta = excluded.vibrato_delta"""
-        vals = vibrato_data[track_id]        
-        cursor.execute(sql, (
-        track_id, 
-        float(vals['vibrato_mean']),
-        float(vals['vibrato_median']),
-        float(vals['vibrato_std']),
-        float(vals['vibrato_skewness']),
-        float(vals['vibrato_kurtosis']),
-        float(vals['vibrato_rms']),
-        float(vals['vibrato_delta'])
-        ))
-        connection.commit()
+
+            # Save to database
+            save_to_database(track_id, features)
+
+        except Exception as e:
+            print(f"Error processing vibrato features for track {track_id}: {e}")
+            default_features = {
+                'vibrato_frequency_mean': 0.0,
+                'vibrato_frequency_std': 0.0,
+                'vibrato_frequency_max': 0.0,
+                'vibrato_extent_mean': 0.0,
+                'vibrato_extent_std': 0.0,
+                'vibrato_extent_max': 0.0,
+                'vibrato_presence': 0.0
+            }
+            vibrato_data[track_id] = {
+                **default_features,
+                'frequencies': [],
+                'extents': [],
+                'times': []
+            }
 
     return vibrato_data
 # Call the function to extract Vibrato Presence
@@ -2514,7 +2713,7 @@ def process(track_id_to_path,mono_loaded_audio, eqloud_loaded_audio):
     # Call the function to extract dynamic complexity
     processed_data_dynamic_complexity = extract_dynamic_complexity(track_id_to_path)
     # Call the function to extract dissonance from spectral peaks
-    #processed_data_dissonance = extract_dissonance_from_peaks(processed_spectral_peaks) #TODO: remove comment, takes too long to run
+    processed_data_dissonance = extract_dissonance_from_peaks(processed_spectral_peaks) #TODO: remove comment, takes too long to run
 
 
 
@@ -2578,112 +2777,47 @@ def process(track_id_to_path,mono_loaded_audio, eqloud_loaded_audio):
 
 
 
-    return 
-    return [
-            yin_processed_data_pitch,
-            processed_data_pitch_melodia,
-            processed_data_melodic_pitch_range,
-            processed_data_mnn,
-            processed_data_inharmonicity,
-            processed_data_chromogram,
-            processed_data_hpcp,
-            processed_data_key,
-            processed_data_chord_progression,
-            processed_spectral_peaks,
-            processed_data_dissonance,
-            processed_data_bpm,
-            processed_data_onset_rate,
-            # processed_data_beat_histogram,
-            processed_loudness_mean,
-            processed_dynamic_range,
-            processed_rms_energy_std,
-            processed_data_mfcc,
-            processed_data_spectral_centroid,
-            processed_segment_data,
-            processed_data_segment_durations,
-            processed_data_novelty_stats,
-            processed_data_log_attack_time,
-            #processed_data_vibrato,
-            processed_data_spectral_flatness,
-            processed_data_tristimulus,
-            processed_data_odd_even_harmonic_ratio,
-            processed_data_danceability,
-            processed_data_dynamic_complexity
-        ]
+    # Successfully processed all features
+    return
 
 
 
 
-def convert_to_serializable(obj):
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, (np.integer, np.int32, np.int64)):
-        return int(obj)
-    if isinstance(obj, (np.floating, np.float32, np.float64)):
-        return float(obj)
-    if isinstance(obj, np.bool_):
-        return bool(obj)
-    if isinstance(obj, dict):
-        return {convert_to_serializable(k): convert_to_serializable(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple, set)):
-        return [convert_to_serializable(i) for i in obj]
-    return obj
 
-def batch_process_audio(track_id_to_path, page=30, max_songs=None, json_filename='processed_audio_features.json'):
+
+def batch_process_audio(track_id_to_path, page=10, max_songs=None):
+    """
+    Process audio files in batches.
+    
+    Args:
+        track_id_to_path (dict): Dictionary mapping track IDs to file paths
+        page (int): Number of tracks to process in each batch
+        max_songs (int, optional): Maximum number of songs to process
+    """
     track_ids = list(track_id_to_path.keys())
     total_processed = 0
-
-    fieldnames = [
-        "yin_processed_data_pitch",
-        "processed_data_pitch_melodia",
-        "processed_data_melodic_pitch_range",
-        "processed_data_mnn",
-        "processed_data_inharmonicity",
-        "processed_data_chromogram",
-        "processed_data_hpcp",
-        "processed_data_key",
-        "processed_data_chord_progression",
-        "processed_spectral_peaks",
-        "processed_data_bpm",
-        "processed_data_onset_rate",
-        "processed_loudness_mean",
-        "processed_dynamic_range",
-        "processed_rms_energy_std",
-        "processed_data_mfcc",
-        "processed_data_spectral_centroid",
-        "processed_segment_data",
-        "processed_data_segment_durations",
-        "processed_data_novelty_stats",
-        "processed_data_log_attack_time",
-        "processed_data_spectral_flatness",
-        "processed_data_vibrato",
-        "processed_data_tristimulus",
-        "processed_data_odd_even_harmonic_ratio",
-        "processed_data_danceability",
-        "processed_data_dynamic_complexity"
-    ]
-
- 
-        
     
-
     for batch_start in range(0, len(track_ids), page):
         if max_songs is not None and total_processed >= max_songs:
             break
 
+        # Get the current batch of track IDs
         batch_track_ids = track_ids[batch_start : batch_start + page]
         batch_track_id_to_path = {tid: track_id_to_path[tid] for tid in batch_track_ids}
 
+        # Initialize audio containers for this batch
         mono_loaded_audio = {}
         eqloud_loaded_audio = {}
         batch_count = 0
 
+        # Load audio files for current batch
         for track_id in batch_track_ids:
             if max_songs is not None and total_processed >= max_songs:
                 break
 
             filepath = track_id_to_path[track_id]
             if not os.path.exists(filepath) or os.path.getsize(filepath) < 1024:
+                print(f"Skipping track {track_id}: File does not exist or is too small")
                 continue
 
             try:
@@ -2693,36 +2827,17 @@ def batch_process_audio(track_id_to_path, page=30, max_songs=None, json_filename
                 eqloud_loaded_audio[track_id] = eqloud_audio
                 batch_count += 1
                 total_processed += 1
-            except Exception:
+            except Exception as e:
+                print(f"Error loading track {track_id}: {str(e)}")
                 continue
 
+        # Process the current batch if we have loaded any audio files
         if mono_loaded_audio or eqloud_loaded_audio:
             print(f"Processing batch of {batch_count} tracks, batch starting at index {batch_start}")
-            batch_results = process(batch_track_id_to_path, mono_loaded_audio, eqloud_loaded_audio)
+            process(batch_track_id_to_path, mono_loaded_audio, eqloud_loaded_audio)
+            print(f"Finished processing batch. Total tracks processed so far: {total_processed}")
 
-            #print(batch_results)
-            return 0
-            '''if batch_results and isinstance(batch_results[0], (list, tuple)):
-                processed_list = batch_results
-            else:
-                processed_list = [batch_results]
-
-            for result in processed_list:
-                item = {}
-                for i, key in enumerate(fieldnames):
-                    item[key] = convert_to_serializable(result[i]) if i < len(result) else None
-
-                # Write comma before all but the first record to keep JSON valid
-                if not first_record:
-                    
-                else:
-                    first_record = False
-
-                
-
-    '''
-
-    #print(f'Data written incrementally to {json_filename}')
+    print(f"Completed processing all batches. Total tracks processed: {total_processed}")
 
 batch_process_audio(track_id_to_path_another_name, page=10)  
 

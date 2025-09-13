@@ -121,7 +121,7 @@ if __name__ == "__main__":
         total_batches_processed += 1
         print(f"\n--- Raw Batch {total_batches_processed} ---")
         for record_entry in batch_data:
-            print(f"  Record ID: {record_entry['id']}")
+            #print(f"  Record ID: {record_entry['id']}")
             #if 'data' in record_entry:  
                 #if isinstance(record_entry['data'], dict):
                     #print(f"  Feature Set: {record_entry['feature_set_name']}")

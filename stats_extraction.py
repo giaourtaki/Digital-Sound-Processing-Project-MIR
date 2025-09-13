@@ -979,18 +979,7 @@ def extract_bpm(mono_loaded_audio, sample_rate=44100):
 
 #region Onset Extraction
 def extract_onset_features(mono_loaded_audio, sample_rate=44100, frame_size=1024, hop_size=512):
-    """
-    Extract onset-related features from audio tracks using both OnsetRate and OnsetDetection algorithms.
-    
-    Args:
-        mono_loaded_audio (dict): Dictionary of mono audio tracks
-        sample_rate (int): Audio sample rate (default: 44100 Hz)
-        frame_size (int): Size of each frame for analysis (default: 1024 samples)
-        hop_size (int): Number of samples between successive frames (default: 512 samples)
-    
-    Returns:
-        dict: Dictionary containing onset features for each track
-    """
+
     def safe_convert_to_float(value):
         """Helper function to safely convert numpy values to float"""
         try:
@@ -1972,20 +1961,7 @@ def extract_log_attack_time(mono_loaded_audio, frame_size=2048, hop_size=1024, s
 
 #region Vibrato Extraction
 def extract_vibrato(mono_loaded_audio, frame_size=8192, hop_size=2048, sample_rate=44100):
-    """
-    Extract vibrato-related features from audio tracks using Essentia's Vibrato algorithm.
-    The algorithm detects vibrato presence and estimates its parameters (frequency and extent)
-    from the audio signal.
-    
-    Args:
-        mono_loaded_audio (dict): Dictionary of mono audio tracks
-        frame_size (int): Size of each frame for analysis
-        hop_size (int): Number of samples between successive frames
-        sample_rate (int): Audio sample rate in Hz
-    
-    Returns:
-        dict: Dictionary containing vibrato features (frequency and extent) for each track
-    """
+
     def calculate_statistics(values):
         """Calculate comprehensive statistical features from an array of values"""
         default_stats = {

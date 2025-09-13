@@ -12,90 +12,102 @@ import numpy as np
 import pandas as pd
 import numpy as np
 import os
-import csv
+import sqlite3
 import sys
 
 #endregion
 
-# for fixing CSV field size limit issue
-csv.field_size_limit(sys.maxsize)
-
-#region stream data from the CSV file in batches
-def stream_raw_csv_data(csv_file_path, batch_size=1000, genre_column='genre', id_column='track_id'):
-
+#region stream data from the database in batches
+def stream_data_from_db(db_path, batch_size=1000, table_name='processed_sound_data'):
     batch_records = []
-    #columns_printed = False
     
     try:
-        with open(csv_file_path, 'r', newline='', encoding='utf-8') as file:
-            # Use csv.DictReader to read the file
-            reader = csv.DictReader(file)
-            
-            # Print column names for testing
-            """""
-            if not columns_printed:
-                print("CSV Columns found:")
-                for i, col in enumerate(reader.fieldnames):
-                    print(f"  {i}: {col}")
-                print()
-                columns_printed = True
-            """""
-            for row_dict in reader:
-                # Convert the row to our expected format
-                record_id = row_dict.get(id_column, 'unknown')
+        connection = sqlite3.connect(db_path)
+        cursor = connection.cursor()
+        
+        # Get all column names
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        columns_info = cursor.fetchall()
+        column_names = [col[1] for col in columns_info]
+        
+        # Query all data
+        cursor.execute(f"SELECT * FROM {table_name}")
+        
+        while True:
+            rows = cursor.fetchmany(batch_size)
+            if not rows:
+                break
                 
-                # Create data dictionary excluding genre and id columns #TODO: investigate
+            batch_records = []
+            for row in rows:
+                # Create dictionary from row data
+                row_dict = dict(zip(column_names, row))
+                
+                # Extract track_id and genre
+                record_id = row_dict.get('track_id', 'unknown')
+                genre_value = row_dict.get('genre', '')
+                
+                # Create data dictionary excluding genre and track_id columns
                 data_dict = {}
                 for key, value in row_dict.items():
-                    if key not in [genre_column, id_column]:
-                        # Try to convert to float, keep as string if conversion fails
-                        try:
-                            # Handle comma-separated values (convert to list)
-                            if ',' in str(value) and not value.replace(',', '').replace('.', '').replace('-', '').isdigit():
-                                data_dict[key] = [float(x.strip()) for x in str(value).split(',') if x.strip()]
+                    if key not in ['genre', 'track_id']:
+                        # Convert BLOB data to numeric if possible
+                        if value is not None:
+                            if isinstance(value, bytes):
+                                try:
+                                    # Try to decode BLOB as string first
+                                    decoded_value = value.decode('utf-8')
+                                    # Try to convert to float
+                                    data_dict[key] = float(decoded_value)
+                                except (UnicodeDecodeError, ValueError):
+                                    # If can't decode or convert, assign numeric hash
+                                    data_dict[key] = hash(value) % 10000
+                            elif isinstance(value, str):
+                                try:
+                                    data_dict[key] = float(value)
+                                except ValueError:
+                                    # Assign numeric value based on string hash
+                                    data_dict[key] = hash(value) % 10000
                             else:
-                                data_dict[key] = float(value) if value and str(value).replace('.', '').replace('-', '').isdigit() else value
-                        except (ValueError, AttributeError):
-                            data_dict[key] = value
+                                data_dict[key] = float(value) if value is not None else 0.0
+                        else:
+                            data_dict[key] = 0.0
                 
                 # Add genre information in the expected format
-                genre_value = row_dict.get(genre_column, '')
                 if genre_value:
                     data_dict['genre'] = [{'genre_title': genre_value}]
                 
                 data_to_yield = {
-                    'feature_set_name': 'csv_data',
+                    'feature_set_name': 'db_data',
                     'id': record_id,
                     'data': data_dict
                 }
                 
                 batch_records.append(data_to_yield)
-                if len(batch_records) >= batch_size:
-                    yield batch_records
-                    batch_records = []
             
-            # Yield remaining records
             if batch_records:
                 yield batch_records
+        
+        connection.close()
                 
-    except FileNotFoundError:
-        print(f"File not found: {csv_file_path}")
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
         yield []
     except Exception as e:
-        print(f"Error reading CSV file: {e}")
+        print(f"Error reading database: {e}")
         yield []
 
 #endregion
 
 if __name__ == "__main__":
-    your_csv_file_path = "merged_output_of_extracted_features.csv"  
+    db_path = "sound_database.db"  
 
-    print("Simulating raw data streaming from the CSV file:")
+    print("Simulating raw data streaming from the database:")
 
     total_records_processed = 0
     total_batches_processed = 0
 
-    for batch_data in stream_raw_csv_data(your_csv_file_path, batch_size=100, genre_column='genre'):
+    for batch_data in stream_data_from_db(db_path, batch_size=100):
         if not batch_data:
             continue
 
@@ -119,46 +131,34 @@ if __name__ == "__main__":
     if total_records_processed > 0:
         print(f"\nCompleted processing {total_records_processed} records across {total_batches_processed} batches.")
     else:
-        print("No records were processed. Check your file path and CSV structure.")
+        print("No records were processed. Check your database path and table structure.")
 
-def fixed_size_feature_transform(extracted_data, list_stats=['mean', 'std', 'min', 'max'], default_value=0.0):
+def fixed_size_feature_transform(extracted_data, default_value=0.0):
+    """Transform database features to fixed-size feature vector.
+    Since database contains single-dimensional statistical values, no need for complex processing."""
     features = []
     for key in sorted(extracted_data.keys()):
-        if key in ['genre', 'genre']:  # Skip genre-related fields
+        if key in ['genre']:  # Skip genre-related fields
             continue
         value = extracted_data[key]
-        if isinstance(value, list):
-            try:
-                arr = np.array(value, dtype=float)
-            except ValueError:
-                arr = np.array([], dtype=float)
-            if arr.size == 0:
-                features.extend([default_value] * len(list_stats))
-            else:
-                for stat_type in list_stats:
-                    try:
-                        if stat_type == 'mean':
-                            features.append(np.nanmean(arr))
-                        elif stat_type == 'std':
-                            features.append(np.nanstd(arr))
-                        elif stat_type == 'min':
-                            features.append(np.nanmin(arr))
-                        elif stat_type == 'max':
-                            features.append(np.nanmax(arr))
-                        elif stat_type == 'median':
-                            features.append(np.nanmedian(arr))
-                        else:
-                            features.append(default_value)
-                    except:
-                        features.append(default_value)
-        elif isinstance(value, (int, float)):
+        
+        # Convert all values to float, using default_value for problematic cases
+        if isinstance(value, (int, float)):
             features.append(float(value))
         elif isinstance(value, str):
-            # Try to convert string to float, skip if not possible
             try:
                 features.append(float(value))
             except ValueError:
-                continue  # Skip non-numeric strings
+                features.append(default_value)
+        elif value is None:
+            features.append(default_value)
+        else:
+            # For any other type, convert to float or use default
+            try:
+                features.append(float(value))
+            except (ValueError, TypeError):
+                features.append(default_value)
+    
     return np.nan_to_num(np.array(features, dtype=float), nan=default_value)
 
 #region Train Model
@@ -306,11 +306,9 @@ def train_scikit_learn_incrementally(data_stream_generator):
     return model, scaler
 
 
-train_generator = stream_raw_csv_data(
-    csv_file_path='merged_output_of_extracted_features.csv',  
-    batch_size=128, 
-    genre_column='genre',  
-    id_column='track_id'   
+train_generator = stream_data_from_db(
+    db_path='sound_database.db',  
+    batch_size=128
 )
 
 model, scaler = train_scikit_learn_incrementally(train_generator)
@@ -427,18 +425,10 @@ def genre_label_func(record_entry):
     
     return label
 
-# Recreate test generator for CSV
-"""
-def preprocess_test_data(df):
-    #drop the genre column and id column from the CSV file
-    df.drop(columns=['album_id', 'album_title'])
-    return df
-"""
-test_generator = stream_raw_csv_data(
-    csv_file_path='merged_output_of_extracted_features.csv',  
-    batch_size=128,
-    genre_column='genre',  
-    id_column='track_id'  
+# Recreate test generator for database
+test_generator = stream_data_from_db(
+    db_path='sound_database.db',  
+    batch_size=128
 )
 
 # Call evaluation method with correct label function

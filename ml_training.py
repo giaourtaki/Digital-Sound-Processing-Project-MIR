@@ -25,13 +25,20 @@ def stream_data_from_db(db_path, batch_size=1000, table_name='processed_sound_da
         connection = sqlite3.connect(db_path)
         cursor = connection.cursor()
         
-        # Get all column names
-        cursor.execute(f"PRAGMA table_info({table_name})")
-        columns_info = cursor.fetchall()
-        column_names = [col[1] for col in columns_info]
+        # Define the exact columns we're selecting (in order)
+        selected_columns = [
+            'track_id', 'genre', 'yin_pitch_mean', 'melodia_pitch_mean', 
+            'melodic_pitch_range', 'mnn_mean', 'inharmonicity_mean', 
+            'chroma_mean', 'hpcp_mean', 'strength', 'dissonance', 
+            'bpm_mean', 'onset_rate', 'mfcc_mean', 'centroid_mean', 
+            'flatness_mean', 'loudness_mean', 't1_mean', 't2_mean', 
+            't3_mean', 'segment_count', 'novelty_mean', 'danceability', 
+            'dynamic_complexity'
+        ]
         
-        # Query all data
-        cursor.execute(f"SELECT * FROM {table_name}")
+        # Query only the selected columns
+        columns_str = ', '.join(selected_columns)
+        cursor.execute(f"SELECT {columns_str} FROM {table_name}")
         
         while True:
             rows = cursor.fetchmany(batch_size)
@@ -40,8 +47,8 @@ def stream_data_from_db(db_path, batch_size=1000, table_name='processed_sound_da
                 
             batch_records = []
             for row in rows:
-                # Create dictionary from row data
-                row_dict = dict(zip(column_names, row))
+                # Create dictionary from row data using selected columns
+                row_dict = dict(zip(selected_columns, row))
                 
                 # Extract track_id and genre
                 record_id = row_dict.get('track_id', 'unknown')

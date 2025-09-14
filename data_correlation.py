@@ -181,106 +181,15 @@ for i in correlation_matrix.columns[1:]:
             print(f"{j} vs {i}: {correlation_value:.4f}")
     
 
- 
+
 plt.figure(figsize=(20, 20))
+
 sns.heatmap(correlation_matrix, annot=False, fmt=".2f", cmap='coolwarm')
-plt.title('Full Correlation Matrix')
-plt.tight_layout()
-plt.savefig('full_correlation_heatmap.png', dpi=300, bbox_inches='tight')
-plt.close()
+
 
 filtered_corr_df = correlation_matrix[((correlation_matrix > threshold) | (correlation_matrix < -threshold)) & (correlation_matrix != 1)] 
 
 plt.figure(figsize=(10, 10))
 sns.heatmap(filtered_corr_df, annot=False, cmap="Reds")
-plt.title(f'Filtered Correlation Matrix (threshold > {threshold})')
-plt.tight_layout()
-plt.savefig('filtered_correlation_heatmap.png', dpi=300, bbox_inches='tight')
-plt.close()
-
-# Recommended features to keep (one from each highly correlated group)
-features_to_keep = [
-    # Pitch features - keep primary representatives
-    'yin_pitch_mean',           # Keep mean over median/std/rms (most interpretable)
-    'melodia_pitch_mean',       # Different algorithm, keep for comparison
-    'melodic_pitch_range',      # Unique pitch span information
-    
-    # MNN features - highly correlated with melodia, keep just one
-    'mnn_mean',                 # Keep as it's fundamental
-    
-    # Inharmonicity - keep mean as primary measure
-    'inharmonicity_mean',       # Most interpretable
-    
-    # Chroma features - extremely high correlation, keep one
-    'chroma_mean',              # Most fundamental representation
-    
-    # HPCP - different from chroma, keep mean
-    'hpcp_mean',                # Harmonic pitch class profile
-    
-    # Rhythm features
-    'bpm_mean',                 # Primary tempo measure
-    'onset_rate',               # Rhythm density (unique information)
-    
-    # Loudness - many are highly correlated, keep primary
-    'loudness_mean',            # Most interpretable loudness measure
-    
-    # Timbre features
-    'mfcc_mean',                # Primary timbre descriptor
-    'centroid_mean',            # Spectral brightness
-    
-    # Harmonic features
-    'strength',                 # Harmonic strength
-    'dissonance',               # Harmonic complexity
-    
-    # Spectral features
-    'flatness_mean',            # Spectral flatness (noisiness)
-    
-    # Advanced features
-    't1_mean',                  # Tristimulus 1 (fundamental vs harmonics)
-    't2_mean',                  # Tristimulus 2 (low harmonics)
-    't3_mean',                  # Tristimulus 3 (high harmonics)
-    
-    # Segment analysis
-    'segment_count',            # Structural information
-    'novelty_mean',             # Musical novelty/change detection
-    
-    # High-level features
-    'danceability',             # Target-relevant feature
-    'dynamic_complexity'        # Overall complexity measure
-]
-
-print(f"Recommended features to keep: {len(features_to_keep)}")
-print("Features selected:")
-for feature in sorted(features_to_keep):
-    print(f"- {feature}")
-
-# Create cleaned dataset
-df_clean = df[features_to_keep]
-
-# Verify no high correlations remain
-clean_corr = df_clean.corr()
-high_corr_remaining = []
-for i in range(len(clean_corr.columns)):
-    for j in range(i+1, len(clean_corr.columns)):
-        corr_val = abs(clean_corr.iloc[i, j])
-        if corr_val > 0.75:
-            high_corr_remaining.append((clean_corr.columns[i], clean_corr.columns[j], corr_val))
-
-print(f"\nRemaining high correlations (>0.75): {len(high_corr_remaining)}")
-for feat1, feat2, corr_val in high_corr_remaining:
-    print(f"- {feat1} vs {feat2}: {corr_val:.4f}")
-
-# Save cleaned dataset
-df_clean.to_csv('cleaned_features.csv', index=False)
-print(f"\nDataset reduced from {len(df.columns)} to {len(df_clean.columns)} features")
-print("Cleaned dataset saved to 'cleaned_features.csv'")
-
-# Create correlation matrix for cleaned data
-plt.figure(figsize=(12, 10))
-sns.heatmap(clean_corr, annot=True, fmt='.2f', cmap='coolwarm', center=0)
-plt.title('Cleaned Dataset Correlation Matrix')
-plt.tight_layout()
-plt.savefig('cleaned_correlation_heatmap.png', dpi=300, bbox_inches='tight')
-plt.close()
-print("Cleaned correlation heatmap saved to 'cleaned_correlation_heatmap.png'")
+plt.show()
 
